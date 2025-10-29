@@ -30,10 +30,10 @@ class ChatService:
         openai.api_key = openai_api_key
         self.client = openai.OpenAI(api_key=openai_api_key)
         
-        # Configuration
-        self.model = "gpt-4-turbo-preview"
+        # Configuration - Optimized for faster streaming
+        self.model = "gpt-3.5-turbo"  # Faster than GPT-4 for streaming
         self.max_context_chunks = 5
-        self.max_tokens = 2000
+        self.max_tokens = 1000  # Reduced for faster response times
         
     def send_message(self, request: ChatRequest) -> ChatResponse:
         """Send a message and get a complete response with sources"""
@@ -127,26 +127,42 @@ class ChatService:
             # Prepare messages for OpenAI
             messages = self._prepare_messages(request.chathistory.messages, request.message, system_prompt)
             
-            # Get streaming response from OpenAI
+            # Get streaming response from OpenAI - Optimized for speed
             stream = self.client.chat.completions.create(
                 model=self.model,
                 messages=messages,
                 max_tokens=self.max_tokens,
-                temperature=0.7,
-                stream=True
+                temperature=0.3,  # Lower temperature for faster, more focused responses
+                stream=True,
+                stream_options={"include_usage": False}  # Reduce overhead
             )
             
-            # Stream the response
+            # Stream the response with buffer optimization
+            buffer = ""
+            buffer_size = 50  # Characters to buffer before sending
+            
             for chunk in stream:
                 if chunk.choices[0].delta.content is not None:
                     content = chunk.choices[0].delta.content
+                    buffer += content
                     
-                    # Format as JSON for consistent streaming
-                    stream_data = {
-                        "type": "content",
-                        "data": content
-                    }
-                    yield f"data: {json.dumps(stream_data)}\n\n"
+                    # Send buffer when it reaches the threshold or contains complete words
+                    if len(buffer) >= buffer_size or content.endswith((' ', '\n', '.', '!', '?', ',')):
+                        # Format as JSON for consistent streaming
+                        stream_data = {
+                            "type": "content",
+                            "data": buffer
+                        }
+                        yield f"data: {json.dumps(stream_data)}\n\n"
+                        buffer = ""
+            
+            # Send any remaining buffer content
+            if buffer:
+                stream_data = {
+                    "type": "content",
+                    "data": buffer
+                }
+                yield f"data: {json.dumps(stream_data)}\n\n"
             
             # Send sources at the end
             sources = self._create_sources(unique_chunks)
@@ -174,17 +190,17 @@ class ChatService:
             # Extract knowledge IDs from chat history
             knowledge_ids = self._extract_knowledge_ids_from_history(request.chatHistory)
             
-            # Search for relevant knowledge with user attributes filtering (semantic search)
-            relevant_chunks = self.knowledge_service.search_knowledge(
+            # Search for relevant knowledge with user attributes filtering (semantic search) - Async
+            relevant_chunks = await self.knowledge_service.search_knowledge(
                 query=request.message,
                 user_attributes=request.userAttributes,
                 n_results=self.max_context_chunks
             )
             
-            # Get additional context from specific knowledge IDs mentioned in chat history
+            # Get additional context from specific knowledge IDs mentioned in chat history - Async
             knowledge_context_chunks = []
             if knowledge_ids:
-                knowledge_context_chunks = self._get_knowledge_by_ids(knowledge_ids, request.userAttributes)
+                knowledge_context_chunks = await self._get_knowledge_by_ids_async(knowledge_ids, request.userAttributes)
             
             # Combine both types of context
             all_chunks = relevant_chunks + knowledge_context_chunks
@@ -201,23 +217,36 @@ class ChatService:
             # Prepare messages for OpenAI
             messages = self._prepare_messages_from_list(request.chatHistory, request.message, system_prompt)
             
-            # Get streaming response from OpenAI
+            # Get streaming response from OpenAI - Optimized for speed
             stream = self.client.chat.completions.create(
                 model=self.model,
                 messages=messages,
                 max_tokens=self.max_tokens,
-                temperature=0.7,
-                stream=True
+                temperature=0.3,  # Lower temperature for faster, more focused responses
+                stream=True,
+                stream_options={"include_usage": False}  # Reduce overhead
             )
             
-            # Stream the response in SSE format
+            # Stream the response in SSE format with buffer optimization
+            buffer = ""
+            buffer_size = 50  # Characters to buffer before sending
+            
             for chunk in stream:
                 if chunk.choices[0].delta.content is not None:
                     content = chunk.choices[0].delta.content
+                    buffer += content
                     
-                    # Format as SSE event
-                    yield f"event: message\n"
-                    yield f"data: {json.dumps({'type': 'content', 'content': content})}\n\n"
+                    # Send buffer when it reaches the threshold or contains complete words
+                    if len(buffer) >= buffer_size or content.endswith((' ', '\n', '.', '!', '?', ',')):
+                        # Format as SSE event
+                        yield f"event: message\n"
+                        yield f"data: {json.dumps({'type': 'content', 'content': buffer})}\n\n"
+                        buffer = ""
+            
+            # Send any remaining buffer content
+            if buffer:
+                yield f"event: message\n"
+                yield f"data: {json.dumps({'type': 'content', 'content': buffer})}\n\n"
             
             # Send sources at the end
             sources = self._create_sources(unique_chunks)
@@ -357,6 +386,18 @@ Remember: Only use information from the provided context or your general knowled
             try:
                 # Get chunks for this specific knowledge ID
                 chunks = self.knowledge_service.get_knowledge_chunks_by_id(knowledge_id, user_attributes)
+                all_chunks.extend(chunks)
+            except Exception as e:
+                logger.warning(f"Could not retrieve knowledge for ID {knowledge_id}: {e}")
+        return all_chunks
+
+    async def _get_knowledge_by_ids_async(self, knowledge_ids: List[str], user_attributes: UserAttributes) -> List[Dict[str, Any]]:
+        """Retrieve knowledge chunks by specific knowledge IDs - Async version for better performance"""
+        all_chunks = []
+        for knowledge_id in knowledge_ids:
+            try:
+                # Get chunks for this specific knowledge ID - Async
+                chunks = await self.knowledge_service.get_knowledge_chunks_by_id(knowledge_id, user_attributes)
                 all_chunks.extend(chunks)
             except Exception as e:
                 logger.warning(f"Could not retrieve knowledge for ID {knowledge_id}: {e}")

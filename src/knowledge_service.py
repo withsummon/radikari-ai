@@ -366,7 +366,7 @@ class KnowledgeService:
                 status=f"error: {str(e)}"
             )
     
-    def search_knowledge(self, query: str, user_attributes, n_results: int = 5) -> List[Dict[str, Any]]:
+    async def search_knowledge(self, query: str, user_attributes, n_results: int = 5) -> List[Dict[str, Any]]:
         """Search for relevant knowledge chunks based on user access"""
         try:
             # Build access filter
@@ -434,38 +434,38 @@ class KnowledgeService:
             "vector_store_stats": vector_stats
         }
     
-    def get_knowledge_chunks_by_id(self, knowledge_id: str, user_attributes) -> List[Dict[str, Any]]:
-        """Get all chunks for a specific knowledge ID with user access check"""
+    async def get_knowledge_chunks_by_id(self, knowledge_id: str, user_attributes) -> List[Dict[str, Any]]:
+        """Get all chunks for a specific knowledge ID with user access filtering"""
         try:
             # Build access filter
             access_filter = self.vector_store.build_access_filter(user_attributes)
             
             # Add knowledge_id filter
             knowledge_filter = {"knowledge_id": knowledge_id}
+            if access_filter:
+                # Combine filters using $and operator
+                combined_filter = {"$and": [access_filter, knowledge_filter]}
+            else:
+                combined_filter = knowledge_filter
             
-            # Combine filters
-            combined_filter = {"$and": [access_filter, knowledge_filter]}
-            
-            # Get chunks from vector store
+            # Search for all chunks with this knowledge_id
             results = self.vector_store.collection.get(
                 where=combined_filter,
-                include=["documents", "metadatas", "distances"]
+                include=["documents", "metadatas"]
             )
             
-            # Format results similar to search results
+            # Format results
             formatted_results = []
             if results["ids"]:
-                for i, chunk_id in enumerate(results["ids"]):
-                    chunk_data = {
-                        "id": chunk_id,
-                        "content": results["documents"][i],
-                        "metadata": results["metadatas"][i],
-                        "relevance_score": 1.0  # Set high relevance for direct ID matches
-                    }
-                    
+                for i in range(len(results["ids"])):
                     # Additional access check
-                    if self._check_user_access(chunk_data["metadata"], user_attributes):
-                        formatted_results.append(chunk_data)
+                    if self._check_user_access(results["metadatas"][i], user_attributes):
+                        formatted_results.append({
+                            "id": results["ids"][i],
+                            "content": results["documents"][i],
+                            "metadata": results["metadatas"][i],
+                            "relevance_score": 1.0  # Full relevance for direct ID matches
+                        })
             
             return formatted_results
             
