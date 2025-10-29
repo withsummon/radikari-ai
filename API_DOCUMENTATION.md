@@ -431,7 +431,6 @@ docker-compose -f docker-compose.test.yml up
 | `API_HOST` | API server host | `0.0.0.0` |
 | `API_PORT` | API server port | `8000` |
 | `LOG_LEVEL` | Logging level | `INFO` |
-
 ---
 
 ## Support

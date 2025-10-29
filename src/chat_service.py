@@ -38,15 +38,29 @@ class ChatService:
     def send_message(self, request: ChatRequest) -> ChatResponse:
         """Send a message and get a complete response with sources"""
         try:
-            # Search for relevant knowledge
+            # Extract knowledge IDs from chat history
+            knowledge_ids = self._extract_knowledge_ids_from_history(request.chathistory.messages)
+            
+            # Search for relevant knowledge (semantic search)
             relevant_chunks = self.knowledge_service.search_knowledge(
                 query=request.message,
                 user_attributes=request.user_attributes,
                 n_results=self.max_context_chunks
             )
             
-            # Build context from relevant chunks
-            context = self._build_context(relevant_chunks)
+            # Get additional context from specific knowledge IDs mentioned in chat history
+            knowledge_context_chunks = []
+            if knowledge_ids:
+                knowledge_context_chunks = self._get_knowledge_by_ids(knowledge_ids, request.user_attributes)
+            
+            # Combine both types of context
+            all_chunks = relevant_chunks + knowledge_context_chunks
+            
+            # Remove duplicates based on chunk_id
+            unique_chunks = self._deduplicate_chunks(all_chunks)
+            
+            # Build context from all relevant chunks
+            context = self._build_context(unique_chunks)
             
             # Create system prompt with context
             system_prompt = self._create_system_prompt(context)
@@ -66,7 +80,7 @@ class ChatService:
             response_content = response.choices[0].message.content
             
             # Create sources
-            sources = self._create_sources(relevant_chunks)
+            sources = self._create_sources(unique_chunks)
             
             return ChatResponse(
                 response=response_content,
@@ -83,15 +97,29 @@ class ChatService:
     async def send_message_stream(self, request: ChatRequest) -> AsyncGenerator[str, None]:
         """Send a message and get a streaming response"""
         try:
-            # Search for relevant knowledge
+            # Extract knowledge IDs from chat history
+            knowledge_ids = self._extract_knowledge_ids_from_history(request.chathistory.messages)
+            
+            # Search for relevant knowledge (semantic search)
             relevant_chunks = self.knowledge_service.search_knowledge(
                 query=request.message,
                 user_attributes=request.user_attributes,
                 n_results=self.max_context_chunks
             )
             
-            # Build context from relevant chunks
-            context = self._build_context(relevant_chunks)
+            # Get additional context from specific knowledge IDs mentioned in chat history
+            knowledge_context_chunks = []
+            if knowledge_ids:
+                knowledge_context_chunks = self._get_knowledge_by_ids(knowledge_ids, request.user_attributes)
+            
+            # Combine both types of context
+            all_chunks = relevant_chunks + knowledge_context_chunks
+            
+            # Remove duplicates based on chunk_id
+            unique_chunks = self._deduplicate_chunks(all_chunks)
+            
+            # Build context from all relevant chunks
+            context = self._build_context(unique_chunks)
             
             # Create system prompt with context
             system_prompt = self._create_system_prompt(context)
@@ -121,7 +149,7 @@ class ChatService:
                     yield f"data: {json.dumps(stream_data)}\n\n"
             
             # Send sources at the end
-            sources = self._create_sources(relevant_chunks)
+            sources = self._create_sources(unique_chunks)
             sources_data = {
                 "type": "sources",
                 "data": [source.dict() for source in sources]
@@ -143,15 +171,29 @@ class ChatService:
     async def send_message_stream_with_attributes(self, request: StreamingChatRequest) -> AsyncGenerator[str, None]:
         """Send a message with user attributes filtering and get a streaming SSE response"""
         try:
-            # Search for relevant knowledge with user attributes filtering
+            # Extract knowledge IDs from chat history
+            knowledge_ids = self._extract_knowledge_ids_from_history(request.chatHistory)
+            
+            # Search for relevant knowledge with user attributes filtering (semantic search)
             relevant_chunks = self.knowledge_service.search_knowledge(
                 query=request.message,
                 user_attributes=request.userAttributes,
                 n_results=self.max_context_chunks
             )
             
-            # Build context from relevant chunks
-            context = self._build_context(relevant_chunks)
+            # Get additional context from specific knowledge IDs mentioned in chat history
+            knowledge_context_chunks = []
+            if knowledge_ids:
+                knowledge_context_chunks = self._get_knowledge_by_ids(knowledge_ids, request.userAttributes)
+            
+            # Combine both types of context
+            all_chunks = relevant_chunks + knowledge_context_chunks
+            
+            # Remove duplicates based on chunk_id
+            unique_chunks = self._deduplicate_chunks(all_chunks)
+            
+            # Build context from all relevant chunks
+            context = self._build_context(unique_chunks)
             
             # Create system prompt with context
             system_prompt = self._create_system_prompt(context)
@@ -178,7 +220,7 @@ class ChatService:
                     yield f"data: {json.dumps({'type': 'content', 'content': content})}\n\n"
             
             # Send sources at the end
-            sources = self._create_sources(relevant_chunks)
+            sources = self._create_sources(unique_chunks)
             # Filter sources based on user access
             accessible_sources = self._check_user_access_to_sources(sources, request.userAttributes)
             
@@ -299,3 +341,34 @@ Remember: Only use information from the provided context or your general knowled
                 accessible_sources.append(source)
         
         return accessible_sources
+    
+    def _extract_knowledge_ids_from_history(self, chat_history: List[ChatMessage]) -> List[str]:
+        """Extract knowledge IDs from chat history messages"""
+        knowledge_ids = []
+        for message in chat_history:
+            if hasattr(message, 'knowledge_id') and message.knowledge_id:
+                knowledge_ids.append(message.knowledge_id)
+        return list(set(knowledge_ids))  # Remove duplicates
+    
+    def _get_knowledge_by_ids(self, knowledge_ids: List[str], user_attributes: UserAttributes) -> List[Dict[str, Any]]:
+        """Retrieve knowledge chunks by specific knowledge IDs"""
+        all_chunks = []
+        for knowledge_id in knowledge_ids:
+            try:
+                # Get chunks for this specific knowledge ID
+                chunks = self.knowledge_service.get_knowledge_chunks_by_id(knowledge_id, user_attributes)
+                all_chunks.extend(chunks)
+            except Exception as e:
+                logger.warning(f"Could not retrieve knowledge for ID {knowledge_id}: {e}")
+        return all_chunks
+    
+    def _deduplicate_chunks(self, chunks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Remove duplicate chunks based on chunk_id"""
+        seen_ids = set()
+        unique_chunks = []
+        for chunk in chunks:
+            chunk_id = chunk.get("id")
+            if chunk_id and chunk_id not in seen_ids:
+                seen_ids.add(chunk_id)
+                unique_chunks.append(chunk)
+        return unique_chunks

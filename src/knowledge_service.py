@@ -433,6 +433,45 @@ class KnowledgeService:
             "total_knowledge_items": len(self.knowledge_store),
             "vector_store_stats": vector_stats
         }
+    
+    def get_knowledge_chunks_by_id(self, knowledge_id: str, user_attributes) -> List[Dict[str, Any]]:
+        """Get all chunks for a specific knowledge ID with user access check"""
+        try:
+            # Build access filter
+            access_filter = self.vector_store.build_access_filter(user_attributes)
+            
+            # Add knowledge_id filter
+            knowledge_filter = {"knowledge_id": knowledge_id}
+            
+            # Combine filters
+            combined_filter = {"$and": [access_filter, knowledge_filter]}
+            
+            # Get chunks from vector store
+            results = self.vector_store.collection.get(
+                where=combined_filter,
+                include=["documents", "metadatas", "distances"]
+            )
+            
+            # Format results similar to search results
+            formatted_results = []
+            if results["ids"]:
+                for i, chunk_id in enumerate(results["ids"]):
+                    chunk_data = {
+                        "id": chunk_id,
+                        "content": results["documents"][i],
+                        "metadata": results["metadatas"][i],
+                        "relevance_score": 1.0  # Set high relevance for direct ID matches
+                    }
+                    
+                    # Additional access check
+                    if self._check_user_access(chunk_data["metadata"], user_attributes):
+                        formatted_results.append(chunk_data)
+            
+            return formatted_results
+            
+        except Exception as e:
+            logger.error(f"Error getting knowledge chunks by ID {knowledge_id}: {e}")
+            return []
 
 
 def setup_knowledge_service_handlers(mq_handler: MQHandler, knowledge_service: KnowledgeService):

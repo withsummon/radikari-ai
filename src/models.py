@@ -72,6 +72,7 @@ class ChatMessage(BaseModel):
     role: Literal["user", "assistant", "system"]
     content: str
     timestamp: Optional[datetime] = None
+    knowledge_id: Optional[str] = None  # Optional knowledge ID for context retrieval
 
 
 class ChatHistory(BaseModel):
