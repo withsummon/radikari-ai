@@ -2,6 +2,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 import logging
+import traceback
 from contextlib import asynccontextmanager
 
 from .models import ChatRequest, ChatResponse, StreamingChatRequest
@@ -10,9 +11,13 @@ from .knowledge_service import KnowledgeService, setup_knowledge_service_handler
 from .vector_store import ChromaVectorStore
 from .mq_handler import MQHandler, start_mq_consumer_thread
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
+# Configure comprehensive logging
+logging.basicConfig(
+    level=logging.DEBUG,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG)
 
 # Global variables for services
 vector_store = None
@@ -27,56 +32,62 @@ async def lifespan(app: FastAPI):
     global vector_store, knowledge_service, chat_service, mq_handler
     
     # Startup
-    logger.info("Starting RAG Backend Microservice...")
+    logger.info("=== Starting RAG Backend Microservice ===")
     
     try:
         # Initialize vector store
+        logger.info("Step 1/5: Initializing ChromaDB vector store...")
         vector_store = ChromaVectorStore()
-        logger.info("Vector store initialized")
+        logger.info("✓ Vector store initialized successfully")
         
         # Initialize knowledge service
+        logger.info("Step 2/5: Initializing knowledge service...")
         knowledge_service = KnowledgeService(vector_store)
-        logger.info("Knowledge service initialized")
+        logger.info("✓ Knowledge service initialized successfully")
         
         # Initialize chat service
+        logger.info("Step 3/5: Initializing chat service...")
         chat_service = ChatService(knowledge_service)
-        logger.info("Chat service initialized")
+        logger.info("✓ Chat service initialized successfully")
         
         # Initialize MQ handler for consuming messages from external backend
+        logger.info("Step 4/5: Initializing MQ handler...")
         mq_handler = MQHandler()
         mq_handler.connect()
-        logger.info("MQ handler connected")
+        logger.info("✓ MQ handler connected successfully")
         
         # Setup knowledge service handlers for MQ consumption
+        logger.info("Step 5/5: Setting up knowledge service handlers...")
         setup_knowledge_service_handlers(mq_handler, knowledge_service)
-        logger.info("Knowledge service MQ handlers registered")
         
-        # Start MQ consumer thread to listen for messages from external backend
+        # Start MQ consumer thread
+        logger.info("Starting MQ consumer thread...")
         start_mq_consumer_thread(mq_handler)
-        logger.info("MQ consumer thread started - ready to receive messages from external backend")
+        logger.info("✓ MQ consumer thread started successfully")
         
-        logger.info("RAG Backend Microservice startup complete")
+        logger.info("=== RAG Backend Microservice Started Successfully ===")
         
     except Exception as e:
-        logger.error(f"Failed to initialize services: {e}")
+        logger.error(f"✗ Failed to start RAG Backend Microservice: {e}")
+        logger.error(f"Full traceback: {traceback.format_exc()}")
         raise
     
     yield
     
     # Shutdown
-    logger.info("Shutting down RAG Backend Microservice...")
-    
+    logger.info("=== Shutting down RAG Backend Microservice ===")
     try:
         if mq_handler:
-            await mq_handler.close()
-            logger.info("MQ handler closed")
+            logger.info("Closing MQ connection...")
+            mq_handler.close()
+            logger.info("✓ MQ connection closed")
     except Exception as e:
-        logger.error(f"Error during shutdown: {e}")
+        logger.error(f"✗ Error during shutdown: {e}")
+        logger.error(f"Full traceback: {traceback.format_exc()}")
     
-    logger.info("RAG Backend Microservice shutdown complete")
+    logger.info("=== RAG Backend Microservice Shutdown Complete ===")
 
 
-# Create FastAPI app
 app = FastAPI(
     title="RAG Backend Microservice",
     description="A Python-based RAG microservice that consumes MQ messages for knowledge management and provides HTTP chat endpoints",

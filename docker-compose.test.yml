@@ -1,6 +1,26 @@
 version: '3.8'
 
 services:
+  # ChromaDB Vector Database
+  chromadb:
+    image: chromadb/chroma:latest
+    container_name: rag-test-chromadb
+    ports:
+      - "8001:8000"
+    environment:
+      - CHROMA_SERVER_HOST=0.0.0.0
+      - CHROMA_SERVER_HTTP_PORT=8000
+    volumes:
+      - chromadb_test_data:/chroma/chroma
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/heartbeat"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    networks:
+      - rag-test-network
+
   rag-service:
     image: rag-service:latest
     container_name: rag-test-service
@@ -14,7 +34,11 @@ services:
       # Update these values to match your friend's RabbitMQ setup
       - RABBITMQ_URL=${RABBITMQ_URL:-amqp://guest:guest@localhost:5672/}
       
-      # Vector Store Configuration
+      # ChromaDB Configuration (using containerized ChromaDB)
+      - CHROMA_HOST=chromadb
+      - CHROMA_PORT=8000
+      
+      # Vector Store Configuration (fallback for local file-based)
       - CHROMA_PERSIST_DIRECTORY=${CHROMA_PERSIST_DIRECTORY:-./chroma_db}
       
       # API Configuration
@@ -24,18 +48,17 @@ services:
       # Logging
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       
+    depends_on:
+      - chromadb
+      
     volumes:
-      # Mount chroma database for persistence
+      # Mount chroma database for persistence (fallback)
       - ./chroma_db:/app/chroma_db
       
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 40s
-      
     restart: unless-stopped
+    
+    networks:
+      - rag-test-network
     
     # Optional: Add resource limits
     deploy:
@@ -46,3 +69,10 @@ services:
         reservations:
           memory: 512M
           cpus: '0.5'
+
+volumes:
+  chromadb_test_data:
+
+networks:
+  rag-test-network:
+    driver: bridge

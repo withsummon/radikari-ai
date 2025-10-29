@@ -33,7 +33,7 @@ services:
     volumes:
       - chromadb_data:/chroma/chroma
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1"]
+      test: ["CMD-SHELL", "timeout 5 bash -c '</dev/tcp/localhost/8000' || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 5
@@ -59,10 +59,8 @@ services:
       - RABBITMQ_QUEUE=knowledge_operations
       - LOG_LEVEL=INFO
     depends_on:
-      rabbitmq:
-        condition: service_healthy
-      chromadb:
-        condition: service_healthy
+      - rabbitmq
+      - chromadb
     volumes:
       - ./logs:/app/logs
     networks:
