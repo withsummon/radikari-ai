@@ -79,7 +79,7 @@ async def lifespan(app: FastAPI):
     try:
         if mq_handler:
             logger.info("Closing MQ connection...")
-            mq_handler.close()
+            mq_handler.disconnect()
             logger.info("✓ MQ connection closed")
     except Exception as e:
         logger.error(f"✗ Error during shutdown: {e}")
