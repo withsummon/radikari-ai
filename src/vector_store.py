@@ -96,10 +96,7 @@ class ChromaVectorStore:
             self.collection = self.client.get_or_create_collection(name="knowledge_base")
             logger.info("Initialized collection without embedding function")
         
-        if chroma_host:
-            logger.info(f"ChromaDB initialized with remote server: {chroma_host}:{chroma_port}")
-        else:
-            logger.info(f"ChromaDB initialized with persist directory: {persist_directory}")
+        logger.info(f"ChromaDB initialized with persist directory: {persist_directory}")
         
     def _ensure_tenant_and_database(self, admin_client, tenant: str, database: str):
         """Ensure tenant and database exist, create them if they don't."""
