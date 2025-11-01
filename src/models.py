@@ -1,5 +1,5 @@
 from typing import List, Optional, Literal, Union
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from datetime import datetime
 
 
@@ -26,15 +26,37 @@ class KnowledgeMessageMetadata(BaseModel):
 class KnowledgeCreateMessage(BaseModel):
     metadata: KnowledgeMessageMetadata
     content: str
-    fileType: Literal["pdf", "image"]
+    fileType: str
     fileUrls: List[str]
+    
+    @field_validator('fileType')
+    @classmethod
+    def validate_file_type(cls, v):
+        """Make fileType case-insensitive by converting to lowercase and validating"""
+        if isinstance(v, str):
+            v_lower = v.lower()
+            if v_lower not in ["pdf", "image"]:
+                raise ValueError(f"fileType must be 'pdf' or 'image' (case-insensitive), got '{v}'")
+            return v_lower
+        return v
 
 
 class KnowledgeUpdateMessage(BaseModel):
     metadata: KnowledgeMessageMetadata
     content: str
-    fileType: Literal["pdf", "image"]
+    fileType: str
     fileUrls: List[str]
+    
+    @field_validator('fileType')
+    @classmethod
+    def validate_file_type(cls, v):
+        """Make fileType case-insensitive by converting to lowercase and validating"""
+        if isinstance(v, str):
+            v_lower = v.lower()
+            if v_lower not in ["pdf", "image"]:
+                raise ValueError(f"fileType must be 'pdf' or 'image' (case-insensitive), got '{v}'")
+            return v_lower
+        return v
 
 
 class KnowledgeDeleteMessage(BaseModel):
