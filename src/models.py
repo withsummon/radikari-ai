@@ -26,13 +26,15 @@ class KnowledgeMessageMetadata(BaseModel):
 class KnowledgeCreateMessage(BaseModel):
     metadata: KnowledgeMessageMetadata
     content: str
-    fileType: str
+    fileType: Optional[str] = None
     fileUrls: List[str]
     
     @field_validator('fileType')
     @classmethod
     def validate_file_type(cls, v):
         """Make fileType case-insensitive by converting to lowercase and validating"""
+        if v is None:
+            return v  # Allow None values
         if isinstance(v, str):
             v_lower = v.lower()
             if v_lower not in ["pdf", "image"]:
@@ -44,13 +46,15 @@ class KnowledgeCreateMessage(BaseModel):
 class KnowledgeUpdateMessage(BaseModel):
     metadata: KnowledgeMessageMetadata
     content: str
-    fileType: str
+    fileType: Optional[str] = None
     fileUrls: List[str]
     
     @field_validator('fileType')
     @classmethod
     def validate_file_type(cls, v):
         """Make fileType case-insensitive by converting to lowercase and validating"""
+        if v is None:
+            return v  # Allow None values
         if isinstance(v, str):
             v_lower = v.lower()
             if v_lower not in ["pdf", "image"]:
