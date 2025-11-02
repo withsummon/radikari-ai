@@ -288,37 +288,90 @@ class ChatService:
     async def send_message_stream_with_attributes(self, request: StreamingChatRequest) -> AsyncGenerator[str, None]:
         """Send a message with user attributes filtering and get a streaming SSE response"""
         try:
+            chat_start_time = time.time()
+            operation_id = f"stream_chat_{int(chat_start_time * 1000)}"
+            
+            logger.info(f"🚀 STARTING STREAMING CHAT: {operation_id}")
+            logger.info(f"=" * 80)
+            logger.info(f"👤 User: {request.userAttributes.userId}")
+            logger.info(f"🏢 User Tenants: {[t.tenantId for t in request.userAttributes.userTenants]}")
+            logger.info(f"💬 User Message: '{request.message}'")
+            logger.info(f"📚 Chat History Length: {len(request.chatHistory)} messages")
+            
             # Extract knowledge IDs from chat history
             knowledge_ids = self._extract_knowledge_ids_from_history(request.chatHistory)
-            
+            if knowledge_ids:
+                logger.info(f"🔗 Knowledge IDs from history: {knowledge_ids}")
+
             # Search for relevant knowledge with user attributes filtering (semantic search) - Async
+            search_start = time.time()
+            logger.info(f"🔍 PERFORMING SEMANTIC SEARCH...")
             relevant_chunks = await self.knowledge_service.search_knowledge(
                 query=request.message,
                 user_attributes=request.userAttributes,
                 n_results=self.max_context_chunks
             )
-            
+            search_duration = time.time() - search_start
+            logger.info(f"✅ Semantic search completed in {search_duration:.3f}s, found {len(relevant_chunks)} chunks")
+
             # Get additional context from specific knowledge IDs mentioned in chat history - Async
             knowledge_context_chunks = []
             if knowledge_ids:
+                context_start = time.time()
+                logger.info(f"📖 FETCHING KNOWLEDGE BY IDs...")
                 knowledge_context_chunks = await self._get_knowledge_by_ids_async(knowledge_ids, request.userAttributes)
-            
+                context_duration = time.time() - context_start
+                logger.info(f"✅ Knowledge fetch completed in {context_duration:.3f}s, found {len(knowledge_context_chunks)} chunks")
+
             # Combine both types of context
             all_chunks = relevant_chunks + knowledge_context_chunks
-            
+            logger.info(f"🔗 Combined chunks: {len(relevant_chunks)} semantic + {len(knowledge_context_chunks)} from history = {len(all_chunks)} total")
+
             # Remove duplicates based on chunk_id
             unique_chunks = self._deduplicate_chunks(all_chunks)
-            
+            logger.info(f"🎯 After deduplication: {len(unique_chunks)} unique chunks")
+
             # Build context from all relevant chunks
+            context_start = time.time()
             context = self._build_context(unique_chunks)
+            context_duration = time.time() - context_start
             
+            # Log detailed context information
+            self._log_context_info(context, unique_chunks, operation_id)
+            logger.info(f"📝 FULL CONTEXT CONTENT:")
+            logger.info(f"=" * 60)
+            logger.info(context)
+            logger.info(f"=" * 60)
+
             # Create system prompt with context
             system_prompt = self._create_system_prompt(context)
-            
+            system_tokens = self._count_tokens(system_prompt)
+            logger.info(f"🎭 SYSTEM PROMPT ({system_tokens} tokens):")
+            logger.info(f"=" * 60)
+            logger.info(system_prompt)
+            logger.info(f"=" * 60)
+
             # Prepare messages for OpenAI
             messages = self._prepare_messages_from_list(request.chatHistory, request.message, system_prompt)
             
+            # Log AI request details
+            self._log_ai_request(messages, operation_id)
+            logger.info(f"📤 FULL AI REQUEST MESSAGES:")
+            logger.info(f"=" * 60)
+            for i, msg in enumerate(messages):
+                role = msg.get('role', 'unknown')
+                content = msg.get('content', '')
+                tokens = self._count_tokens(content)
+                logger.info(f"Message {i+1} ({role.upper()}) - {tokens} tokens:")
+                logger.info(f"   {content}")
+                if i < len(messages) - 1:
+                    logger.info(f"   {'-' * 40}")
+            logger.info(f"=" * 60)
+
             # Get streaming response from OpenAI - Optimized for speed
+            ai_start_time = time.time()
+            logger.info(f"🤖 SENDING REQUEST TO OPENAI...")
+            
             stream = self.client.chat.completions.create(
                 model=self.model,
                 messages=messages,
@@ -326,15 +379,19 @@ class ChatService:
                 temperature=0.3,  # Lower temperature for faster, more focused responses
                 stream=True
             )
-            
+
             # Stream the response in SSE format with buffer optimization
             buffer = ""
             buffer_size = 50  # Characters to buffer before sending
+            full_response = ""  # Track full response for logging
+            
+            logger.info(f"📡 STREAMING AI RESPONSE...")
             
             for chunk in stream:
                 if chunk.choices[0].delta.content is not None:
                     content = chunk.choices[0].delta.content
                     buffer += content
+                    full_response += content
                     
                     # Send buffer when it reaches the threshold or contains complete words
                     if len(buffer) >= buffer_size or content.endswith((' ', '\n', '.', '!', '?', ',')):
@@ -342,26 +399,46 @@ class ChatService:
                         yield f"event: message\n"
                         yield f"data: {json.dumps({'type': 'content', 'content': buffer})}\n\n"
                         buffer = ""
-            
+
             # Send any remaining buffer content
             if buffer:
                 yield f"event: message\n"
                 yield f"data: {json.dumps({'type': 'content', 'content': buffer})}\n\n"
-            
+                
+            # Log AI response details
+            self._log_ai_response(full_response, ai_start_time, operation_id)
+            logger.info(f"📥 FULL AI RESPONSE:")
+            logger.info(f"=" * 60)
+            logger.info(full_response)
+            logger.info(f"=" * 60)
+
             # Send sources at the end
             sources = self._create_sources(unique_chunks)
             # Filter sources based on user access
             accessible_sources = self._check_user_access_to_sources(sources, request.userAttributes)
             
+            logger.info(f"📚 SOURCES ({len(accessible_sources)} accessible out of {len(sources)} total):")
+            for i, source in enumerate(accessible_sources):
+                logger.info(f"   Source {i+1}: {source.knowledge_id} (Score: {source.relevance_score:.4f})")
+
             yield f"event: sources\n"
             yield f"data: {json.dumps({'type': 'sources', 'sources': [source.dict() for source in accessible_sources]})}\n\n"
-            
+
             # Send end marker
             yield f"event: end\n"
             yield f"data: {json.dumps({'type': 'end'})}\n\n"
             
+            total_duration = time.time() - chat_start_time
+            logger.info(f"🏁 STREAMING CHAT COMPLETED: {operation_id}")
+            logger.info(f"   ⏱️ Total Duration: {total_duration:.3f}s")
+            logger.info(f"   🔍 Search: {search_duration:.3f}s")
+            logger.info(f"   📝 Context: {context_duration:.3f}s") 
+            logger.info(f"   🤖 AI Response: {time.time() - ai_start_time:.3f}s")
+            logger.info(f"=" * 80)
+
         except Exception as e:
-            logger.error(f"Error in send_message_stream_with_attributes: {e}")
+            logger.error(f"❌ ERROR in {operation_id}: {e}")
+            logger.error(f"   Full error details:", exc_info=True)
             yield f"event: error\n"
             yield f"data: {json.dumps({'type': 'error', 'message': f'I apologize, but I encountered an error while processing your request: {str(e)}'})}\n\n"
     

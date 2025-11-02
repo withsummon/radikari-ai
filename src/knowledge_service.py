@@ -402,11 +402,27 @@ class KnowledgeService:
             logger.info(f"      🔍 Access checking: {access_check_duration:.3f}s")
             logger.info(f"   📊 Results: {len(results)} → {len(filtered_results)} (after access filtering)")
             
-            # Log result details
-            for i, result in enumerate(filtered_results[:3]):  # Log first 3 results
+            # Log detailed result information
+            logger.info(f"📋 DETAILED SEARCH RESULTS for query: '{query}'")
+            logger.info(f"=" * 80)
+            
+            for i, result in enumerate(filtered_results):
                 score = result.get('score', result.get('distance', 0))
-                content_preview = result.get('content', '')[:80]
-                logger.info(f"   📄 Result {i+1}: Score {score:.3f}, '{content_preview}...'")
+                content = result.get('content', '')
+                metadata = result.get('metadata', {})
+                
+                logger.info(f"📄 RESULT #{i+1}:")
+                logger.info(f"   🎯 Score: {score:.4f}")
+                logger.info(f"   🆔 Knowledge ID: {metadata.get('knowledge_id', 'unknown')}")
+                logger.info(f"   🏢 Tenant ID: {metadata.get('tenant_id', 'unknown')}")
+                logger.info(f"   🌐 Is Global: {metadata.get('isGlobal', False)}")
+                logger.info(f"   📝 Content Length: {len(content)} chars")
+                logger.info(f"   📖 Content Preview: '{content[:150]}{'...' if len(content) > 150 else ''}'")
+                
+                if i < len(filtered_results) - 1:  # Don't add separator after last result
+                    logger.info(f"   {'-' * 60}")
+            
+            logger.info(f"=" * 80)
             
             return filtered_results
             

@@ -184,10 +184,13 @@ class ChromaVectorStore:
     ) -> List[Dict[str, Any]]:
         """Search for similar chunks in the vector store"""
         try:
+            # Handle empty filter - ChromaDB expects None instead of empty dict
+            effective_filter = where_filter if where_filter else None
+            
             results = self.collection.query(
                 query_texts=[query],
                 n_results=n_results,
-                where=where_filter,
+                where=effective_filter,
                 include=["documents", "metadatas", "distances"]
             )
             
@@ -272,14 +275,14 @@ class ChromaVectorStore:
             logger.error(f"Error updating metadata for knowledge_id {knowledge_id}: {e}")
             raise
 
-    def build_access_filter(self, user_attributes) -> Dict[str, Any]:
+    def build_access_filter(self, user_attributes) -> Optional[Dict[str, Any]]:
         """Build a filter for user access control based on user attributes"""
         # Check if filtering is disabled via environment variable
         no_filter = os.getenv("NO_FILTER", "false").lower() in ("true", "1", "yes", "on")
         
         if no_filter:
             logger.info("🚫 NO_FILTER is enabled - bypassing all access control filters")
-            return {}  # Empty filter means no restrictions
+            return None  # No filter means no restrictions
         
         # Users can access:
         # 1. Global knowledge (isGlobal = True)
@@ -304,8 +307,7 @@ class ChromaVectorStore:
             tenant_condition = {"tenantId": tenant.tenantId}
             or_conditions.append(tenant_condition)
         
-        # For now, return a simple filter - we'll do additional filtering in application logic
-        return {"$or": or_conditions} if len(or_conditions) > 1 else or_conditions[0] if or_conditions else {}
+        return {"$or": or_conditions} if len(or_conditions) > 1 else or_conditions[0] if or_conditions else None
 
     def get_collection_stats(self) -> Dict[str, Any]:
         """Get statistics about the collection"""
