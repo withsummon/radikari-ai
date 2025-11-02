@@ -33,8 +33,8 @@ class KnowledgeCreateMessage(BaseModel):
     @classmethod
     def validate_file_type(cls, v):
         """Make fileType case-insensitive by converting to lowercase and validating"""
-        if v is None:
-            return v  # Allow None values
+        if v is None or v == "":
+            return None  # Allow None values and empty strings (convert empty to None)
         if isinstance(v, str):
             v_lower = v.lower()
             if v_lower not in ["pdf", "image"]:
@@ -53,8 +53,8 @@ class KnowledgeUpdateMessage(BaseModel):
     @classmethod
     def validate_file_type(cls, v):
         """Make fileType case-insensitive by converting to lowercase and validating"""
-        if v is None:
-            return v  # Allow None values
+        if v is None or v == "":
+            return None  # Allow None values and empty strings (convert empty to None)
         if isinstance(v, str):
             v_lower = v.lower()
             if v_lower not in ["pdf", "image"]:
