@@ -25,10 +25,16 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy source code
 COPY . .
 
+# Create directory for ChromaDB persistence
+RUN mkdir -p /app/chroma_db
+
 # Create non-root user for security
 RUN useradd --create-home --shell /bin/bash app && \
     chown -R app:app /app
 USER app
+
+# Define volume for ChromaDB data persistence
+VOLUME ["/app/chroma_db"]
 
 # Expose port for HTTP API
 EXPOSE 8000
