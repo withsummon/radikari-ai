@@ -274,6 +274,13 @@ class ChromaVectorStore:
 
     def build_access_filter(self, user_attributes) -> Dict[str, Any]:
         """Build a filter for user access control based on user attributes"""
+        # Check if filtering is disabled via environment variable
+        no_filter = os.getenv("NO_FILTER", "false").lower() in ("true", "1", "yes", "on")
+        
+        if no_filter:
+            logger.info("🚫 NO_FILTER is enabled - bypassing all access control filters")
+            return {}  # Empty filter means no restrictions
+        
         # Users can access:
         # 1. Global knowledge (isGlobal = True)
         # 2. Knowledge with no tenantId (public within system)

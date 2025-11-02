@@ -417,6 +417,13 @@ class KnowledgeService:
     
     def _check_user_access(self, chunk_metadata: Dict[str, Any], user_attributes) -> bool:
         """Check if user has access to a specific chunk based on metadata"""
+        # Check if filtering is disabled via environment variable
+        import os
+        no_filter = os.getenv("NO_FILTER", "false").lower() in ("true", "1", "yes", "on")
+        
+        if no_filter:
+            return True  # Allow access to all chunks when filtering is disabled
+        
         # Global knowledge is accessible to everyone
         if chunk_metadata.get("isGlobal", False):
             return True
