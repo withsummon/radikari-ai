@@ -1,5 +1,6 @@
 import uuid
 import logging
+import time
 from typing import List, Dict, Any
 from datetime import datetime
 import re
@@ -135,6 +136,7 @@ class KnowledgeService:
             chunks_text = self.text_chunker.chunk_text(content)
             
             # Create chunks and add to vector store
+            chunks = []
             chunk_ids = []
             for i, chunk_text in enumerate(chunks_text):
                 chunk_id = f"{knowledge_id}_chunk_{i}"
@@ -145,24 +147,11 @@ class KnowledgeService:
                     metadata=metadata,
                     chunk_index=i
                 )
-                
-                # Add to vector store
-                self.vector_store.add_document(
-                    doc_id=chunk_id,
-                    content=chunk_text,
-                    metadata={
-                        "knowledge_id": knowledge_id,
-                        "chunk_index": i,
-                        "tenantId": metadata.tenantId,
-                        "tenantRoleIds": metadata.tenantRoleIds,
-                        "type": metadata.type,
-                        "isGlobal": metadata.isGlobal,
-                        "filetype": message.fileType,
-                        "access": message.metadata.access,
-                        "accessUserIds": message.metadata.accessUserIds or []
-                    }
-                )
+                chunks.append(chunk)
                 chunk_ids.append(chunk_id)
+            
+            # Add all chunks to vector store at once
+            self.vector_store.add_chunks(chunks)
             
             # Store knowledge metadata
             self.knowledge_store[knowledge_id] = knowledge
@@ -368,27 +357,62 @@ class KnowledgeService:
     
     async def search_knowledge(self, query: str, user_attributes, n_results: int = 5) -> List[Dict[str, Any]]:
         """Search for relevant knowledge chunks based on user access"""
+        search_start = time.time()
+        search_id = f"search_{int(search_start * 1000)}"
+        
+        logger.info(f"🔍 Starting knowledge search: {search_id}")
+        logger.info(f"   🔎 Query: '{query[:100]}{'...' if len(query) > 100 else ''}'")
+        logger.info(f"   👤 User tenants: {[t.tenantId for t in user_attributes.userTenants]}")
+        logger.info(f"   📊 Requested results: {n_results}")
+        
         try:
-            # Build access filter
+            # Step 1: Build access filter
+            filter_start = time.time()
             access_filter = self.vector_store.build_access_filter(user_attributes)
+            filter_duration = time.time() - filter_start
+            logger.info(f"🔐 Access filter built in {filter_duration:.3f}s: {access_filter}")
             
-            # Search vector store
+            # Step 2: Search vector store
+            vector_search_start = time.time()
             results = self.vector_store.search(
                 query=query,
                 n_results=n_results,
                 where_filter=access_filter
             )
+            vector_search_duration = time.time() - vector_search_start
+            logger.info(f"🎯 Vector search completed in {vector_search_duration:.3f}s: {len(results)} initial results")
             
-            # Additional filtering for complex access rules
+            # Step 3: Additional filtering for complex access rules
+            access_check_start = time.time()
             filtered_results = []
-            for result in results:
+            for i, result in enumerate(results):
                 if self._check_user_access(result["metadata"], user_attributes):
                     filtered_results.append(result)
+                    logger.debug(f"   ✅ Result {i+1}: Access granted - {result.get('knowledge_id', 'unknown')}")
+                else:
+                    logger.debug(f"   ❌ Result {i+1}: Access denied - {result.get('knowledge_id', 'unknown')}")
+            
+            access_check_duration = time.time() - access_check_start
+            total_duration = time.time() - search_start
+            
+            logger.info(f"🏁 Search {search_id} completed in {total_duration:.3f}s")
+            logger.info(f"   📈 Performance breakdown:")
+            logger.info(f"      🔐 Filter building: {filter_duration:.3f}s")
+            logger.info(f"      🎯 Vector search: {vector_search_duration:.3f}s")
+            logger.info(f"      🔍 Access checking: {access_check_duration:.3f}s")
+            logger.info(f"   📊 Results: {len(results)} → {len(filtered_results)} (after access filtering)")
+            
+            # Log result details
+            for i, result in enumerate(filtered_results[:3]):  # Log first 3 results
+                score = result.get('score', result.get('distance', 0))
+                content_preview = result.get('content', '')[:80]
+                logger.info(f"   📄 Result {i+1}: Score {score:.3f}, '{content_preview}...'")
             
             return filtered_results
             
         except Exception as e:
-            logger.error(f"Error searching knowledge: {e}")
+            search_duration = time.time() - search_start
+            logger.error(f"❌ Error in search {search_id} after {search_duration:.3f}s: {e}")
             return []
     
     def _check_user_access(self, chunk_metadata: Dict[str, Any], user_attributes) -> bool:

@@ -4,6 +4,8 @@ from typing import List, Dict, Any, AsyncGenerator
 import json
 from datetime import datetime
 import os
+import time
+import tiktoken
 from dotenv import load_dotenv
 
 from .models import (
@@ -34,6 +36,58 @@ class ChatService:
         self.model = "gpt-3.5-turbo"  # Faster than GPT-4 for streaming
         self.max_context_chunks = 5
         self.max_tokens = 1000  # Reduced for faster response times
+        
+        # Initialize token encoder for tracking
+        try:
+            self.token_encoder = tiktoken.encoding_for_model(self.model)
+        except KeyError:
+            # Fallback to cl100k_base encoding if model not found
+            self.token_encoder = tiktoken.get_encoding("cl100k_base")
+            
+        logger.info(f"🤖 ChatService initialized with model: {self.model}, max_tokens: {self.max_tokens}")
+        
+    def _count_tokens(self, text: str) -> int:
+        """Count tokens in a text string"""
+        try:
+            return len(self.token_encoder.encode(text))
+        except Exception as e:
+            logger.warning(f"Token counting failed: {e}, using character approximation")
+            return len(text) // 4  # Rough approximation: 1 token ≈ 4 characters
+            
+    def _log_context_info(self, context: str, chunks: List[Dict[str, Any]], operation: str):
+        """Log detailed context information"""
+        context_tokens = self._count_tokens(context)
+        logger.info(f"📝 {operation} - Context built:")
+        logger.info(f"   📊 Chunks used: {len(chunks)}")
+        logger.info(f"   🔤 Context length: {len(context)} chars, ~{context_tokens} tokens")
+        logger.info(f"   📚 Knowledge sources: {[chunk.get('knowledge_id', 'unknown') for chunk in chunks[:3]]}{'...' if len(chunks) > 3 else ''}")
+        
+    def _log_ai_request(self, messages: List[Dict[str, str]], operation: str):
+        """Log AI request details"""
+        total_input_tokens = sum(self._count_tokens(msg.get('content', '')) for msg in messages)
+        logger.info(f"🚀 {operation} - AI Request:")
+        logger.info(f"   🔢 Messages count: {len(messages)}")
+        logger.info(f"   📝 Input tokens: ~{total_input_tokens}")
+        logger.info(f"   🎯 Model: {self.model}")
+        logger.info(f"   ⚙️ Max tokens: {self.max_tokens}")
+        
+        # Log system prompt info
+        system_msg = next((msg for msg in messages if msg.get('role') == 'system'), None)
+        if system_msg:
+            system_tokens = self._count_tokens(system_msg['content'])
+            logger.info(f"   🎭 System prompt: {len(system_msg['content'])} chars, ~{system_tokens} tokens")
+            
+    def _log_ai_response(self, response_content: str, start_time: float, operation: str):
+        """Log AI response details"""
+        duration = time.time() - start_time
+        response_tokens = self._count_tokens(response_content)
+        tokens_per_second = response_tokens / duration if duration > 0 else 0
+        
+        logger.info(f"✅ {operation} - AI Response completed:")
+        logger.info(f"   ⏱️ Duration: {duration:.2f}s")
+        logger.info(f"   📝 Response tokens: ~{response_tokens}")
+        logger.info(f"   🚀 Speed: {tokens_per_second:.1f} tokens/sec")
+        logger.info(f"   📊 Response length: {len(response_content)} chars")
         
     def send_message(self, request: ChatRequest) -> ChatResponse:
         """Send a message and get a complete response with sources"""
@@ -96,55 +150,87 @@ class ChatService:
     
     async def send_message_stream(self, request: ChatRequest) -> AsyncGenerator[str, None]:
         """Send a message and get a streaming response"""
+        operation_start = time.time()
+        operation_id = f"stream_{int(operation_start * 1000)}"
+        
+        logger.info(f"🎬 Starting streaming chat operation: {operation_id}")
+        logger.info(f"   👤 User query: '{request.message[:100]}{'...' if len(request.message) > 100 else ''}'")
+        logger.info(f"   📜 Chat history length: {len(request.chathistory.messages)} messages")
+        
         try:
-            # Extract knowledge IDs from chat history
+            # Step 1: Extract knowledge IDs from chat history
+            knowledge_search_start = time.time()
             knowledge_ids = self._extract_knowledge_ids_from_history(request.chathistory.messages)
+            logger.info(f"🔍 Knowledge ID extraction: {len(knowledge_ids)} IDs found in {time.time() - knowledge_search_start:.3f}s")
             
-            # Search for relevant knowledge (semantic search)
+            # Step 2: Search for relevant knowledge (semantic search)
+            semantic_search_start = time.time()
             relevant_chunks = self.knowledge_service.search_knowledge(
                 query=request.message,
                 user_attributes=request.user_attributes,
                 n_results=self.max_context_chunks
             )
+            semantic_duration = time.time() - semantic_search_start
+            logger.info(f"🔎 Semantic search completed: {len(relevant_chunks)} chunks in {semantic_duration:.3f}s")
             
-            # Get additional context from specific knowledge IDs mentioned in chat history
+            # Step 3: Get additional context from specific knowledge IDs mentioned in chat history
+            context_search_start = time.time()
             knowledge_context_chunks = []
             if knowledge_ids:
                 knowledge_context_chunks = self._get_knowledge_by_ids(knowledge_ids, request.user_attributes)
+                logger.info(f"📚 Knowledge ID context: {len(knowledge_context_chunks)} chunks in {time.time() - context_search_start:.3f}s")
             
-            # Combine both types of context
+            # Step 4: Combine both types of context
             all_chunks = relevant_chunks + knowledge_context_chunks
             
-            # Remove duplicates based on chunk_id
+            # Step 5: Remove duplicates based on chunk_id
             unique_chunks = self._deduplicate_chunks(all_chunks)
+            logger.info(f"🔄 Deduplication: {len(all_chunks)} → {len(unique_chunks)} chunks")
             
-            # Build context from all relevant chunks
+            # Step 6: Build context from all relevant chunks
+            context_build_start = time.time()
             context = self._build_context(unique_chunks)
+            self._log_context_info(context, unique_chunks, f"STREAM-{operation_id}")
             
-            # Create system prompt with context
+            # Step 7: Create system prompt with context
             system_prompt = self._create_system_prompt(context)
             
-            # Prepare messages for OpenAI
+            # Step 8: Prepare messages for OpenAI
             messages = self._prepare_messages(request.chathistory.messages, request.message, system_prompt)
+            self._log_ai_request(messages, f"STREAM-{operation_id}")
             
-            # Get streaming response from OpenAI - Optimized for speed
+            # Step 9: Get streaming response from OpenAI - Optimized for speed
+            ai_start_time = time.time()
+            logger.info(f"🚀 Starting OpenAI streaming request...")
+            
             stream = self.client.chat.completions.create(
                 model=self.model,
                 messages=messages,
                 max_tokens=self.max_tokens,
                 temperature=0.3,  # Lower temperature for faster, more focused responses
-                stream=True,
-                stream_options={"include_usage": False}  # Reduce overhead
+                stream=True
             )
             
-            # Stream the response with buffer optimization
+            # Step 10: Stream the response with buffer optimization
             buffer = ""
             buffer_size = 50  # Characters to buffer before sending
+            total_response = ""
+            chunk_count = 0
+            first_token_time = None
+            
+            logger.info(f"📡 Starting response streaming...")
             
             for chunk in stream:
                 if chunk.choices[0].delta.content is not None:
                     content = chunk.choices[0].delta.content
                     buffer += content
+                    total_response += content
+                    chunk_count += 1
+                    
+                    # Record time to first token
+                    if first_token_time is None:
+                        first_token_time = time.time()
+                        logger.info(f"⚡ First token received in {first_token_time - ai_start_time:.3f}s")
                     
                     # Send buffer when it reaches the threshold or contains complete words
                     if len(buffer) >= buffer_size or content.endswith((' ', '\n', '.', '!', '?', ',')):
@@ -164,6 +250,10 @@ class ChatService:
                 }
                 yield f"data: {json.dumps(stream_data)}\n\n"
             
+            # Log AI response completion
+            self._log_ai_response(total_response, ai_start_time, f"STREAM-{operation_id}")
+            logger.info(f"📊 Streaming stats: {chunk_count} chunks processed")
+            
             # Send sources at the end
             sources = self._create_sources(unique_chunks)
             sources_data = {
@@ -171,13 +261,24 @@ class ChatService:
                 "data": [source.dict() for source in sources]
             }
             yield f"data: {json.dumps(sources_data)}\n\n"
+            logger.info(f"📚 Sources sent: {len(sources)} sources")
             
             # Send end marker
             end_data = {"type": "end"}
             yield f"data: {json.dumps(end_data)}\n\n"
             
+            # Log operation completion
+            total_duration = time.time() - operation_start
+            logger.info(f"🏁 Operation {operation_id} completed in {total_duration:.2f}s")
+            logger.info(f"   📈 Performance summary:")
+            logger.info(f"      🔍 Knowledge search: {semantic_duration:.3f}s")
+            logger.info(f"      🤖 AI processing: {time.time() - ai_start_time:.3f}s")
+            logger.info(f"      📊 Total chunks: {len(unique_chunks)}")
+            logger.info(f"      📝 Response length: {len(total_response)} chars")
+            
         except Exception as e:
-            logger.error(f"Error in send_message_stream: {e}")
+            logger.error(f"❌ Error in streaming operation {operation_id}: {e}")
+            logger.error(f"   ⏱️ Failed after {time.time() - operation_start:.2f}s")
             error_data = {
                 "type": "error",
                 "data": f"I apologize, but I encountered an error while processing your request: {str(e)}"
@@ -223,8 +324,7 @@ class ChatService:
                 messages=messages,
                 max_tokens=self.max_tokens,
                 temperature=0.3,  # Lower temperature for faster, more focused responses
-                stream=True,
-                stream_options={"include_usage": False}  # Reduce overhead
+                stream=True
             )
             
             # Stream the response in SSE format with buffer optimization
