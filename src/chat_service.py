@@ -32,10 +32,10 @@ class ChatService:
         openai.api_key = openai_api_key
         self.client = openai.OpenAI(api_key=openai_api_key)
         
-        # Configuration - Optimized for faster streaming
-        self.model = "gpt-3.5-turbo"  # Faster than GPT-4 for streaming
-        self.max_context_chunks = 5
-        self.max_tokens = 1000  # Reduced for faster response times
+        # Configuration - Enhanced for better context retrieval
+        self.model = "gpt-4o-mini"  # Updated to GPT-4o mini for better performance
+        self.max_context_chunks = 12  # Increased from 5 to retrieve more context
+        self.max_tokens = 2000  # Increased for longer, more detailed responses
         
         # Initialize token encoder for tracking
         try:

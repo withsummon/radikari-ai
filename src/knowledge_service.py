@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 class TextChunker:
     """Handles text chunking for knowledge documents"""
     
-    def __init__(self, chunk_size: int = 1000, chunk_overlap: int = 200):
+    def __init__(self, chunk_size: int = 2000, chunk_overlap: int = 400):
         self.chunk_size = chunk_size
         self.chunk_overlap = chunk_overlap
     
@@ -355,7 +355,7 @@ class KnowledgeService:
                 status=f"error: {str(e)}"
             )
     
-    async def search_knowledge(self, query: str, user_attributes, n_results: int = 5) -> List[Dict[str, Any]]:
+    async def search_knowledge(self, query: str, user_attributes, n_results: int = 12) -> List[Dict[str, Any]]:
         """Search for relevant knowledge chunks based on user access"""
         search_start = time.time()
         search_id = f"search_{int(search_start * 1000)}"
@@ -402,27 +402,11 @@ class KnowledgeService:
             logger.info(f"      🔍 Access checking: {access_check_duration:.3f}s")
             logger.info(f"   📊 Results: {len(results)} → {len(filtered_results)} (after access filtering)")
             
-            # Log detailed result information
-            logger.info(f"📋 DETAILED SEARCH RESULTS for query: '{query}'")
-            logger.info(f"=" * 80)
-            
-            for i, result in enumerate(filtered_results):
+            # Log result details
+            for i, result in enumerate(filtered_results[:3]):  # Log first 3 results
                 score = result.get('score', result.get('distance', 0))
-                content = result.get('content', '')
-                metadata = result.get('metadata', {})
-                
-                logger.info(f"📄 RESULT #{i+1}:")
-                logger.info(f"   🎯 Score: {score:.4f}")
-                logger.info(f"   🆔 Knowledge ID: {metadata.get('knowledge_id', 'unknown')}")
-                logger.info(f"   🏢 Tenant ID: {metadata.get('tenant_id', 'unknown')}")
-                logger.info(f"   🌐 Is Global: {metadata.get('isGlobal', False)}")
-                logger.info(f"   📝 Content Length: {len(content)} chars")
-                logger.info(f"   📖 Content Preview: '{content[:150]}{'...' if len(content) > 150 else ''}'")
-                
-                if i < len(filtered_results) - 1:  # Don't add separator after last result
-                    logger.info(f"   {'-' * 60}")
-            
-            logger.info(f"=" * 80)
+                content_preview = result.get('content', '')[:80]
+                logger.info(f"   📄 Result {i+1}: Score {score:.3f}, '{content_preview}...'")
             
             return filtered_results
             
@@ -433,13 +417,6 @@ class KnowledgeService:
     
     def _check_user_access(self, chunk_metadata: Dict[str, Any], user_attributes) -> bool:
         """Check if user has access to a specific chunk based on metadata"""
-        # Check if filtering is disabled via environment variable
-        import os
-        no_filter = os.getenv("NO_FILTER", "false").lower() in ("true", "1", "yes", "on")
-        
-        if no_filter:
-            return True  # Allow access to all chunks when filtering is disabled
-        
         # Global knowledge is accessible to everyone
         if chunk_metadata.get("isGlobal", False):
             return True
