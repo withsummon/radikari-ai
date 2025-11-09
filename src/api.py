@@ -152,11 +152,11 @@ async def send_message_stream(request: ChatRequest):
         
         return StreamingResponse(
             chat_service.send_message_stream(request),
-            media_type="text/plain",
+            media_type="text/event-stream",
             headers={
                 "Cache-Control": "no-cache",
                 "Connection": "keep-alive",
-                "Content-Type": "text/event-stream"
+                "X-Accel-Buffering": "no"
             }
         )
         
@@ -179,7 +179,8 @@ async def send_message_stream_sse(request: StreamingChatRequest):
                 "Cache-Control": "no-cache",
                 "Connection": "keep-alive",
                 "Access-Control-Allow-Origin": "*",
-                "Access-Control-Allow-Headers": "Cache-Control"
+                "Access-Control-Allow-Headers": "Cache-Control",
+                "X-Accel-Buffering": "no"
             }
         )
         

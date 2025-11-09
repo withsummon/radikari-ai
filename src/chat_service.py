@@ -33,9 +33,15 @@ class ChatService:
         self.client = openai.OpenAI(api_key=openai_api_key)
         
         # Configuration - Enhanced for better context retrieval
-        self.model = "gpt-4o-mini"  # Updated to GPT-4o mini for better performance
-        self.max_context_chunks = 12  # Increased from 5 to retrieve more context
-        self.max_tokens = 2000  # Increased for longer, more detailed responses
+        # Allow overriding model and max tokens via environment for compatibility
+        model_env = os.getenv("OPENAI_MODEL")
+        self.model = model_env if model_env else "gpt-4o-mini"  # default to chat.completions-compatible model
+        max_tokens_env = os.getenv("OPENAI_MAX_TOKENS")
+        self.max_tokens = int(max_tokens_env) if max_tokens_env else 2000  # Increased for longer responses
+        # Number of context chunks to retrieve for RAG
+        max_chunks_env = os.getenv("MAX_CONTEXT_CHUNKS")
+        self.max_context_chunks = int(max_chunks_env) if max_chunks_env else 12
+
         
         # Initialize token encoder for tracking
         try:
@@ -213,17 +219,16 @@ class ChatService:
             
             # Step 10: Stream the response with buffer optimization
             buffer = ""
-            buffer_size = 50  # Characters to buffer before sending
+            buffer_size = 10  # Smaller buffer for snappier streaming
             total_response = ""
             chunk_count = 0
             first_token_time = None
-            
+
             logger.info(f"📡 Starting response streaming...")
             
             for chunk in stream:
                 if chunk.choices[0].delta.content is not None:
                     content = chunk.choices[0].delta.content
-                    buffer += content
                     total_response += content
                     chunk_count += 1
                     
@@ -232,23 +237,9 @@ class ChatService:
                         first_token_time = time.time()
                         logger.info(f"⚡ First token received in {first_token_time - ai_start_time:.3f}s")
                     
-                    # Send buffer when it reaches the threshold or contains complete words
-                    if len(buffer) >= buffer_size or content.endswith((' ', '\n', '.', '!', '?', ',')):
-                        # Format as JSON for consistent streaming
-                        stream_data = {
-                            "type": "content",
-                            "data": buffer
-                        }
-                        yield f"data: {json.dumps(stream_data)}\n\n"
-                        buffer = ""
-            
-            # Send any remaining buffer content
-            if buffer:
-                stream_data = {
-                    "type": "content",
-                    "data": buffer
-                }
-                yield f"data: {json.dumps(stream_data)}\n\n"
+                    # Forward each OpenAI chunk immediately without buffering
+                    logger.debug(f"SSE chunk len={len(content)} t={time.time() - ai_start_time:.3f}s")
+                    yield f"data: {json.dumps({'type': 'content', 'data': content})}\n\n"
             
             # Log AI response completion
             self._log_ai_response(total_response, ai_start_time, f"STREAM-{operation_id}")
@@ -382,7 +373,7 @@ class ChatService:
 
             # Stream the response in SSE format with buffer optimization
             buffer = ""
-            buffer_size = 50  # Characters to buffer before sending
+            buffer_size = 10  # Smaller buffer for snappier streaming
             full_response = ""  # Track full response for logging
             
             logger.info(f"📡 STREAMING AI RESPONSE...")
@@ -390,20 +381,12 @@ class ChatService:
             for chunk in stream:
                 if chunk.choices[0].delta.content is not None:
                     content = chunk.choices[0].delta.content
-                    buffer += content
                     full_response += content
                     
-                    # Send buffer when it reaches the threshold or contains complete words
-                    if len(buffer) >= buffer_size or content.endswith((' ', '\n', '.', '!', '?', ',')):
-                        # Format as SSE event
-                        yield f"event: message\n"
-                        yield f"data: {json.dumps({'type': 'content', 'content': buffer})}\n\n"
-                        buffer = ""
-
-            # Send any remaining buffer content
-            if buffer:
-                yield f"event: message\n"
-                yield f"data: {json.dumps({'type': 'content', 'content': buffer})}\n\n"
+                    # Forward each OpenAI chunk immediately as an SSE message
+                    logger.debug(f"SSE chunk len={len(content)} t={time.time() - ai_start_time:.3f}s")
+                    yield f"event: message\n"
+                    yield f"data: {json.dumps({'type': 'content', 'content': content})}\n\n"
                 
             # Log AI response details
             self._log_ai_response(full_response, ai_start_time, operation_id)
