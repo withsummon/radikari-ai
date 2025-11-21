@@ -8,12 +8,21 @@ from datetime import datetime
 import os
 from dotenv import load_dotenv
 
-from .models import (
-    AddKnowledgeRequest, AddKnowledgeResponse,
-    UpdateKnowledgeMetadataRequest, UpdateKnowledgeMetadataResponse,
-    DeleteKnowledgeRequest, DeleteKnowledgeResponse,
-    KnowledgeCreateMessage, KnowledgeUpdateMessage, KnowledgeDeleteMessage
-)
+try:
+    from .models import (
+        AddKnowledgeRequest, AddKnowledgeResponse,
+        UpdateKnowledgeMetadataRequest, UpdateKnowledgeMetadataResponse,
+        DeleteKnowledgeRequest, DeleteKnowledgeResponse,
+        KnowledgeCreateMessage, KnowledgeUpdateMessage, KnowledgeDeleteMessage
+    )
+except ImportError:
+    # Fallback for direct execution
+    from models import (
+        AddKnowledgeRequest, AddKnowledgeResponse,
+        UpdateKnowledgeMetadataRequest, UpdateKnowledgeMetadataResponse,
+        DeleteKnowledgeRequest, DeleteKnowledgeResponse,
+        KnowledgeCreateMessage, KnowledgeUpdateMessage, KnowledgeDeleteMessage
+    )
 
 load_dotenv()
 
@@ -41,32 +50,33 @@ class MQHandler:
     def connect(self):
         """Establish connection to RabbitMQ"""
         try:
-            self.connection = pika.BlockingConnection(
-                pika.URLParameters(self.rabbitmq_url)
-            )
+            logger.info(f"Attempting to connect to RabbitMQ at: {self.rabbitmq_url}")
+            
+            # Configure connection parameters with timeouts
+            parameters = pika.URLParameters(self.rabbitmq_url)
+            parameters.socket_timeout = 30  # 30 seconds socket timeout
+            parameters.connection_attempts = 3  # Retry 3 times
+            parameters.retry_delay = 5  # 5 seconds between retries
+            
+            self.connection = pika.BlockingConnection(parameters)
             self.channel = self.connection.channel()
             
             # Declare existing queues
             self.channel.queue_declare(queue=self.KNOWLEDGE_QUEUE, durable=True)
             self.channel.queue_declare(queue=self.RESPONSE_QUEUE, durable=True)
             
-            # Declare new topic-based queues with arguments to match existing configuration
-            queue_args = {'x-message-ttl': 30000}  # Match existing TTL configuration
-            
+            # Declare new topic-based queues without TTL to allow for longer PDF processing
             self.channel.queue_declare(
-                queue=self.KNOWLEDGE_CREATE_QUEUE, 
-                durable=True, 
-                arguments=queue_args
+                queue=self.KNOWLEDGE_CREATE_QUEUE,
+                durable=True
             )
             self.channel.queue_declare(
-                queue=self.KNOWLEDGE_UPDATE_QUEUE, 
-                durable=True, 
-                arguments=queue_args
+                queue=self.KNOWLEDGE_UPDATE_QUEUE,
+                durable=True
             )
             self.channel.queue_declare(
-                queue=self.KNOWLEDGE_DELETE_QUEUE, 
-                durable=True, 
-                arguments=queue_args
+                queue=self.KNOWLEDGE_DELETE_QUEUE,
+                durable=True
             )
             
             logger.info("Connected to RabbitMQ successfully")

@@ -1,0 +1,28 @@
+[project]
+name = "radikari-ai"
+version = "0.1.0"
+description = "Labubu"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "qdrant-client",
+    "google-generativeai",
+    "pika",
+    "python-dotenv",
+    "pdfplumber",
+    "PyPDF2",
+    "requests",
+    "langchain-text-splitters",
+    "pydantic",
+    "huggingface-hub",
+    "openai",
+    "aio-pika",
+    "python-multipart",
+    "aiofiles",
+    "httpx",
+    "numpy",
+    "tiktoken",
+    "pytest>=9.0.1",
+    "cowsay>=6.1",
+    "uvicorn>=0.38.0",
+]

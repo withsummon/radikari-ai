@@ -8,7 +8,7 @@ import logging
 import os
 from dotenv import load_dotenv
 
-from .vector_store import ChromaVectorStore
+from .vector_store import QdrantVectorStore
 from .knowledge_service import KnowledgeService, setup_knowledge_service_handlers
 from .mq_handler import MQHandler, start_mq_consumer_thread
 
@@ -38,7 +38,7 @@ class PureMQService:
             logger.info("Initializing Pure MQ Service...")
             
             # Initialize vector store
-            self.vector_store = ChromaVectorStore()
+            self.vector_store = QdrantVectorStore()
             logger.info("Vector store initialized")
             
             # Initialize knowledge service
@@ -47,7 +47,7 @@ class PureMQService:
             
             # Initialize MQ handler
             self.mq_handler = MQHandler()
-            await self.mq_handler.connect()
+            self.mq_handler.connect()
             logger.info("MQ handler connected")
             
             # Setup knowledge service handlers for MQ consumption
@@ -93,7 +93,7 @@ class PureMQService:
         
         try:
             if self.mq_handler:
-                await self.mq_handler.close()
+                self.mq_handler.disconnect()
                 logger.info("MQ handler closed")
         except Exception as e:
             logger.error(f"Error during shutdown: {e}")
@@ -104,7 +104,7 @@ class PureMQService:
 async def main():
     """Main entry point for pure MQ service"""
     # Validate required environment variables
-    required_env_vars = ["OPENAI_API_KEY"]
+    required_env_vars = ["GOOGLE_API_KEY", "QDRANT_URL"]
     missing_vars = [var for var in required_env_vars if not os.getenv(var)]
     
     if missing_vars:

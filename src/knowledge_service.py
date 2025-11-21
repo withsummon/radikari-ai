@@ -5,6 +5,8 @@ from typing import List, Dict, Any
 from datetime import datetime
 import re
 
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+
 from .models import (
     Knowledge, KnowledgeChunk, KnowledgeMetadata,
     AddKnowledgeRequest, AddKnowledgeResponse,
@@ -12,7 +14,7 @@ from .models import (
     DeleteKnowledgeRequest, DeleteKnowledgeResponse,
     KnowledgeCreateMessage, KnowledgeUpdateMessage, KnowledgeDeleteMessage
 )
-from .vector_store import ChromaVectorStore
+from .vector_store import QdrantVectorStore
 from .mq_handler import MQHandler
 from .pdf_processor import PDFProcessor
 
@@ -20,48 +22,21 @@ logger = logging.getLogger(__name__)
 
 
 class TextChunker:
-    """Handles text chunking for knowledge documents"""
+    """Handles text chunking for knowledge documents using LangChain's RecursiveCharacterTextSplitter"""
     
-    def __init__(self, chunk_size: int = 2000, chunk_overlap: int = 400):
-        self.chunk_size = chunk_size
-        self.chunk_overlap = chunk_overlap
+    def __init__(self, chunk_size: int = 1000, chunk_overlap: int = 200):
+        self.splitter = RecursiveCharacterTextSplitter(
+            chunk_size=chunk_size,
+            chunk_overlap=chunk_overlap,
+            separators=["\n\n", "\n", " ", ""],
+            length_function=len,
+        )
     
     def chunk_text(self, text: str) -> List[str]:
-        """Split text into overlapping chunks"""
-        # Clean the text
+        """Split text into overlapping chunks using RecursiveCharacterTextSplitter"""
+        # Clean the text first
         text = self._clean_text(text)
-        
-        if len(text) <= self.chunk_size:
-            return [text]
-        
-        chunks = []
-        start = 0
-        
-        while start < len(text):
-            end = start + self.chunk_size
-            
-            # If we're not at the end, try to break at a sentence or word boundary
-            if end < len(text):
-                # Look for sentence endings
-                sentence_end = text.rfind('.', start, end)
-                if sentence_end > start + self.chunk_size // 2:
-                    end = sentence_end + 1
-                else:
-                    # Look for word boundaries
-                    word_end = text.rfind(' ', start, end)
-                    if word_end > start + self.chunk_size // 2:
-                        end = word_end
-            
-            chunk = text[start:end].strip()
-            if chunk:
-                chunks.append(chunk)
-            
-            # Move start position with overlap
-            start = end - self.chunk_overlap
-            if start >= len(text):
-                break
-        
-        return chunks
+        return self.splitter.split_text(text)
     
     def _clean_text(self, text: str) -> str:
         """Clean and normalize text"""
@@ -75,7 +50,7 @@ class TextChunker:
 class KnowledgeService:
     """Service for managing knowledge operations"""
     
-    def __init__(self, vector_store: ChromaVectorStore):
+    def __init__(self, vector_store: QdrantVectorStore):
         self.vector_store = vector_store
         self.text_chunker = TextChunker()
         self.knowledge_store: Dict[str, Knowledge] = {}  # In-memory store for knowledge metadata
@@ -472,22 +447,25 @@ class KnowledgeService:
             else:
                 combined_filter = knowledge_filter
             
-            # Search for all chunks with this knowledge_id
-            results = self.vector_store.collection.get(
-                where=combined_filter,
-                include=["documents", "metadatas"]
+            # Search for all chunks with this knowledge_id using the search method
+            # Since we want all chunks for a specific knowledge_id, we'll use a broad search
+            # and filter by knowledge_id in the results
+            results = self.vector_store.search(
+                query=knowledge_id,  # Use knowledge_id as query to find related chunks
+                n_results=100,  # Get a large number to ensure we get all chunks
+                where_filter=access_filter
             )
             
-            # Format results
+            # Filter results to only include chunks with the exact knowledge_id
             formatted_results = []
-            if results["ids"]:
-                for i in range(len(results["ids"])):
+            for result in results:
+                if result.get("metadata", {}).get("knowledge_id") == knowledge_id:
                     # Additional access check
-                    if self._check_user_access(results["metadatas"][i], user_attributes):
+                    if self._check_user_access(result["metadata"], user_attributes):
                         formatted_results.append({
-                            "id": results["ids"][i],
-                            "content": results["documents"][i],
-                            "metadata": results["metadatas"][i],
+                            "id": result["id"],
+                            "content": result["content"],
+                            "metadata": result["metadata"],
                             "relevance_score": 1.0  # Full relevance for direct ID matches
                         })
             

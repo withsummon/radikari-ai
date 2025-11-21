@@ -1,281 +1,233 @@
-import chromadb
-from chromadb.config import Settings, DEFAULT_TENANT, DEFAULT_DATABASE
-from chromadb.utils import embedding_functions
-import logging
+
 import os
+import logging
 from typing import List, Dict, Any, Optional
-import uuid
-import os
-from dotenv import load_dotenv
-import logging
-import traceback
+import google.generativeai as genai
+from qdrant_client import QdrantClient
+from qdrant_client.http import models
+from qdrant_client.http.models import Distance, VectorParams, PointStruct, Filter, FieldCondition, MatchValue, MatchAny
 
 from .models import KnowledgeChunk, KnowledgeMetadata
+from dotenv import load_dotenv
 
 load_dotenv()
 
-# Configure detailed logging
+# Configure logging
 logging.basicConfig(
-    level=logging.DEBUG,
+    level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.DEBUG)
 
 
-class ChromaVectorStore:
-    def __init__(self, persist_directory: str = "./chroma_db"):
-        """Initialize ChromaDB vector store with local persistence only."""
-        logger.info("=== Starting ChromaDB Vector Store Initialization (Local Mode) ===")
-        self.persist_directory = persist_directory
-        logger.debug(f"Persist directory: {persist_directory}")
+class QdrantVectorStore:
+    def __init__(self):
+        """Initialize Qdrant vector store with Google GenAI embeddings"""
+        logger.info("=== Starting Qdrant Vector Store Initialization ===")
+        self.collection_name = "radikari_knowledge"
         
-        # Use local ChromaDB only - no remote connection
-        try:
-            logger.info(f"Using local ChromaDB with persist directory: {persist_directory}")
-            self.client = chromadb.PersistentClient(path=persist_directory)
-            logger.info("✓ Successfully created PersistentClient")
-        except Exception as e:
-            logger.error(f"✗ Failed to create ChromaDB client: {e}")
-            logger.error(f"Full traceback: {traceback.format_exc()}")
-            raise
+        # Initialize Qdrant Client
+        qdrant_url = os.getenv("QDRANT_URL")
+        qdrant_api_key = os.getenv("QDRANT_API_KEY")
         
-        # Initialize embedding function
-        try:
-            logger.info("Initializing SentenceTransformer embedding function...")
-            self.embedding_function = embedding_functions.SentenceTransformerEmbeddingFunction(
-                model_name="all-MiniLM-L6-v2"
-            )
-            logger.info("✓ Successfully initialized embedding function")
-        except Exception as e:
-            logger.error(f"✗ Failed to initialize embedding function: {e}")
-            logger.error(f"Full traceback: {traceback.format_exc()}")
-            raise
+        if not qdrant_url:
+            raise ValueError("QDRANT_URL environment variable is required")
         
-        # Get or create collection with ChromaDB latest version approach
-        logger.info("Attempting to get or create ChromaDB collection...")
-        try:
-            logger.debug("Trying with embedding function...")
-            self.collection = self.client.get_or_create_collection(
-                name="knowledge_base",
-                embedding_function=self.embedding_function
-            )
-            logger.info("✓ Successfully initialized ChromaDB collection with embedding function")
-        except Exception as e:
-            logger.warning(f"Failed to create collection with embedding function: {e}")
-            logger.debug(f"Full traceback: {traceback.format_exc()}")
+        logger.info(f"Connecting to Qdrant at: {qdrant_url}")
+        self.client = QdrantClient(
+            url=qdrant_url,
+            api_key=qdrant_api_key,
+        )
+        logger.info("✓ Successfully connected to Qdrant")
+        
+        # Initialize Google GenAI
+        google_api_key = os.getenv("GOOGLE_API_KEY")
+        if not google_api_key:
+            raise ValueError("GOOGLE_API_KEY environment variable is required")
             
-            # Fallback: try without embedding function
-            try:
-                logger.debug("Trying without embedding function...")
-                self.collection = self.client.get_or_create_collection(name="knowledge_base")
-                logger.info("✓ Successfully created collection without embedding function")
-            except Exception as e2:
-                logger.error(f"✗ Failed to create collection even without embedding function: {e2}")
-                logger.error(f"Full traceback: {traceback.format_exc()}")
-                raise e2
+        genai.configure(api_key=google_api_key)
+        self.embedding_model = "gemini-embeddings-001"
+        logger.info("✓ Successfully configured Google GenAI")
         
-        logger.info("=== ChromaDB Vector Store Initialization Complete ===")
-        
-        # Test the connection
+        # Ensure collection exists
+        self._ensure_collection()
+        logger.info("=== Qdrant Vector Store Initialization Complete ===")
+
+    def _ensure_collection(self):
+        """Ensure the collection exists with correct config"""
         try:
-            logger.info("Testing ChromaDB connection...")
-            collection_count = self.collection.count()
-            logger.info(f"✓ Connection test successful. Collection has {collection_count} documents")
+            if not self.client.collection_exists(self.collection_name):
+                logger.info(f"Creating collection {self.collection_name}")
+                self.client.create_collection(
+                    collection_name=self.collection_name,
+                    vectors_config=VectorParams(size=768, distance=Distance.COSINE),
+                )
+                logger.info(f"✓ Successfully created collection {self.collection_name}")
+            else:
+                logger.info(f"✓ Collection {self.collection_name} already exists")
         except Exception as e:
-            logger.error(f"✗ Connection test failed: {e}")
-            logger.error(f"Full traceback: {traceback.format_exc()}")
-            self.collection = self.client.get_or_create_collection(
-                name="knowledge_base",
-                embedding_function=self.embedding_function
-            )
-            logger.info("Successfully initialized collection 'knowledge_base'")
-        except Exception as e:
-            logger.error(f"Failed to initialize collection: {e}")
-            # Fallback without embedding function
-            self.collection = self.client.get_or_create_collection(name="knowledge_base")
-            logger.info("Initialized collection without embedding function")
-        
-        logger.info(f"ChromaDB initialized with persist directory: {persist_directory}")
-        
-    def _ensure_tenant_and_database(self, admin_client, tenant: str, database: str):
-        """Ensure tenant and database exist, create them if they don't."""
-        # For default tenant, it should already exist in most ChromaDB setups
-        if tenant == DEFAULT_TENANT:
-            logger.info(f"Using default tenant '{tenant}' - should already exist")
-        else:
-            try:
-                # Try to get the tenant
-                admin_client.get_tenant(name=tenant)
-                logger.info(f"Tenant '{tenant}' already exists")
-            except Exception as e:
-                # Tenant doesn't exist, create it
-                logger.info(f"Creating tenant '{tenant}'")
-                try:
-                    admin_client.create_tenant(name=tenant)
-                except Exception as create_error:
-                    logger.error(f"Failed to create tenant '{tenant}': {create_error}")
-                    raise
+            logger.error(f"✗ Failed to ensure collection exists: {e}")
+            raise
+
+    def _generate_embeddings(self, texts: List[str], task_type: str = "retrieval_document") -> List[List[float]]:
+        """Generate embeddings using Google GenAI"""
+        try:
+            logger.debug(f"Generating embeddings for {len(texts)} texts with task_type: {task_type}")
+            results = []
             
-        # For default database, it should already exist in most ChromaDB setups
-        if database == DEFAULT_DATABASE:
-            logger.info(f"Using default database '{database}' - should already exist")
-        else:
-            try:
-                # Try to get the database
-                admin_client.get_database(name=database, tenant=tenant)
-                logger.info(f"Database '{database}' already exists in tenant '{tenant}'")
-            except Exception as e:
-                # Database doesn't exist, create it
-                logger.info(f"Creating database '{database}' in tenant '{tenant}'")
-                try:
-                    admin_client.create_database(name=database, tenant=tenant)
-                except Exception as create_error:
-                    logger.error(f"Failed to create database '{database}': {create_error}")
-                    raise
+            for i, text in enumerate(texts):
+                if i % 10 == 0:  # Log progress every 10 texts
+                    logger.debug(f"Processing embedding {i+1}/{len(texts)}")
+                
+                embedding_result = genai.embed_content(
+                    model=self.embedding_model,
+                    content=text,
+                    task_type=task_type
+                )
+                results.append(embedding_result['embedding'])
+            
+            logger.debug(f"✓ Successfully generated {len(results)} embeddings")
+            return results
+        except Exception as e:
+            logger.error(f"✗ Failed to generate embeddings: {e}")
+            raise
 
     def add_chunks(self, chunks: List[KnowledgeChunk]) -> List[str]:
-        """Add knowledge chunks to the vector store"""
+        """Add chunks to Qdrant"""
         try:
-            documents = []
-            metadatas = []
-            ids = []
+            logger.info(f"Adding {len(chunks)} chunks to Qdrant")
+            texts = [chunk.content for chunk in chunks]
+            embeddings = self._generate_embeddings(texts, task_type="retrieval_document")
             
-            for chunk in chunks:
-                documents.append(chunk.content)
-                
-                # Prepare metadata for Chroma (must be flat dict with string/numeric values)
-                metadata = {
+            points = []
+            for i, chunk in enumerate(chunks):
+                # Flatten metadata for Qdrant payload
+                payload = {
                     "knowledge_id": chunk.knowledge_id,
                     "chunk_index": chunk.chunk_index,
+                    "content": chunk.content,
                     "type": chunk.metadata.type,
                     "isGlobal": chunk.metadata.isGlobal,
+                    "tenantId": chunk.metadata.tenantId,
+                    # Store arrays as lists in Qdrant (it supports them)
+                    "tenantRoleIds": chunk.metadata.tenantRoleIds or []
                 }
                 
-                # Add optional metadata fields
-                if chunk.metadata.tenantId:
-                    metadata["tenantId"] = chunk.metadata.tenantId
-                
-                if chunk.metadata.tenantRoleIds:
-                    # Store as comma-separated string since Chroma doesn't support arrays
-                    metadata["tenantRoleIds"] = ",".join(chunk.metadata.tenantRoleIds)
-                
-                metadatas.append(metadata)
-                ids.append(chunk.id)
-            
-            self.collection.add(
-                documents=documents,
-                metadatas=metadatas,
-                ids=ids
-            )
-            
-            logger.info(f"Added {len(chunks)} chunks to vector store")
-            return ids
-            
-        except Exception as e:
-            logger.error(f"Error adding chunks to vector store: {e}")
-            raise
+                points.append(PointStruct(
+                    id=chunk.id,  # Ensure this is a valid UUID or integer
+                    vector=embeddings[i],
+                    payload=payload
+                ))
 
-    def search(
-        self, 
-        query: str, 
-        n_results: int = 5,
-        where_filter: Optional[Dict[str, Any]] = None
-    ) -> List[Dict[str, Any]]:
-        """Search for similar chunks in the vector store"""
-        try:
-            # Handle empty filter - ChromaDB expects None instead of empty dict
-            effective_filter = where_filter if where_filter else None
-            
-            results = self.collection.query(
-                query_texts=[query],
-                n_results=n_results,
-                where=effective_filter,
-                include=["documents", "metadatas", "distances"]
+            self.client.upsert(
+                collection_name=self.collection_name,
+                points=points
             )
-            
-            # Format results
-            formatted_results = []
-            if results["ids"] and results["ids"][0]:
-                for i in range(len(results["ids"][0])):
-                    formatted_results.append({
-                        "id": results["ids"][0][i],
-                        "content": results["documents"][0][i],
-                        "metadata": results["metadatas"][0][i],
-                        "distance": results["distances"][0][i],
-                        "relevance_score": 1 - results["distances"][0][i]  # Convert distance to relevance
-                    })
-            
-            return formatted_results
+            logger.info(f"✓ Upserted {len(points)} points to Qdrant")
+            return [p.id for p in points]
             
         except Exception as e:
-            logger.error(f"Error searching vector store: {e}")
+            logger.error(f"✗ Error adding chunks to Qdrant: {e}")
             raise
 
     def delete_by_knowledge_id(self, knowledge_id: str) -> bool:
-        """Delete all chunks belonging to a specific knowledge item"""
+        """Delete points by knowledge_id"""
         try:
-            # Get all chunks for this knowledge_id
-            results = self.collection.get(
-                where={"knowledge_id": knowledge_id},
-                include=["metadatas"]
+            logger.info(f"Deleting chunks for knowledge_id: {knowledge_id}")
+            self.client.delete(
+                collection_name=self.collection_name,
+                points_selector=models.FilterSelector(
+                    filter=models.Filter(
+                        must=[
+                            models.FieldCondition(
+                                key="knowledge_id",
+                                match=models.MatchValue(value=knowledge_id)
+                            )
+                        ]
+                    )
+                )
             )
-            
-            if results["ids"]:
-                self.collection.delete(ids=results["ids"])
-                logger.info(f"Deleted {len(results['ids'])} chunks for knowledge_id: {knowledge_id}")
-                return True
-            
-            return False
-            
+            logger.info(f"✓ Successfully deleted chunks for knowledge_id: {knowledge_id}")
+            return True
         except Exception as e:
-            logger.error(f"Error deleting chunks for knowledge_id {knowledge_id}: {e}")
+            logger.error(f"✗ Error deleting knowledge {knowledge_id}: {e}")
             raise
 
     def update_metadata(self, knowledge_id: str, new_metadata: KnowledgeMetadata) -> bool:
-        """Update metadata for all chunks of a knowledge item"""
+        """Update metadata for a knowledge ID"""
         try:
-            # Get all chunks for this knowledge_id
-            results = self.collection.get(
-                where={"knowledge_id": knowledge_id},
-                include=["metadatas"]
+            logger.info(f"Updating metadata for knowledge_id: {knowledge_id}")
+            payload = {
+                "type": new_metadata.type,
+                "isGlobal": new_metadata.isGlobal,
+                "tenantId": new_metadata.tenantId,
+                "tenantRoleIds": new_metadata.tenantRoleIds or []
+            }
+            
+            self.client.set_payload(
+                collection_name=self.collection_name,
+                payload=payload,
+                points=models.Filter(
+                    must=[
+                        models.FieldCondition(
+                            key="knowledge_id",
+                            match=models.MatchValue(value=knowledge_id)
+                        )
+                    ]
+                )
             )
-            
-            if not results["ids"]:
-                return False
-            
-            # Prepare updated metadata
-            updated_metadatas = []
-            for existing_metadata in results["metadatas"]:
-                updated_metadata = {
-                    "knowledge_id": knowledge_id,
-                    "chunk_index": existing_metadata["chunk_index"],
-                    "type": new_metadata.type,
-                    "isGlobal": new_metadata.isGlobal,
-                }
-                
-                if new_metadata.tenantId:
-                    updated_metadata["tenantId"] = new_metadata.tenantId
-                
-                if new_metadata.tenantRoleIds:
-                    updated_metadata["tenantRoleIds"] = ",".join(new_metadata.tenantRoleIds)
-                
-                updated_metadatas.append(updated_metadata)
-            
-            # Update metadata
-            self.collection.update(
-                ids=results["ids"],
-                metadatas=updated_metadatas
-            )
-            
-            logger.info(f"Updated metadata for {len(results['ids'])} chunks of knowledge_id: {knowledge_id}")
+            logger.info(f"✓ Successfully updated metadata for knowledge_id: {knowledge_id}")
             return True
-            
         except Exception as e:
-            logger.error(f"Error updating metadata for knowledge_id {knowledge_id}: {e}")
+            logger.error(f"✗ Error updating metadata for {knowledge_id}: {e}")
             raise
 
-    def build_access_filter(self, user_attributes) -> Optional[Dict[str, Any]]:
+    def search(self, query: str, n_results: int = 5, where_filter: Optional[Dict] = None) -> List[Dict]:
+        """
+        Search implementation.
+        Note: The worker primarily writes, but this is useful for verification/testing.
+        """
+        try:
+            logger.info(f"Searching for: '{query}' with {n_results} results")
+            embedding = genai.embed_content(
+                model=self.embedding_model,
+                content=query,
+                task_type="retrieval_query"
+            )['embedding']
+            
+            # Convert dict filter to Qdrant Filter object if necessary
+            query_filter = None
+            if where_filter:
+                # This would need to be implemented based on the filter structure
+                # For now, we'll pass it as-is assuming it's already a Qdrant Filter
+                query_filter = where_filter
+            
+            results = self.client.search(
+                collection_name=self.collection_name,
+                query_vector=embedding,
+                limit=n_results,
+                query_filter=query_filter
+            )
+            
+            formatted_results = [
+                {
+                    "id": hit.id,
+                    "content": hit.payload.get("content"),
+                    "metadata": hit.payload,
+                    "score": hit.score,
+                    "relevance_score": hit.score  # Qdrant uses similarity scores
+                }
+                for hit in results
+            ]
+            
+            logger.info(f"✓ Found {len(formatted_results)} results")
+            return formatted_results
+            
+        except Exception as e:
+            logger.error(f"✗ Error searching Qdrant: {e}")
+            raise
+
+    def build_access_filter(self, user_attributes) -> Optional[Filter]:
         """Build a filter for user access control based on user attributes"""
         # Check if filtering is disabled via environment variable
         no_filter = os.getenv("NO_FILTER", "false").lower() in ("true", "1", "yes", "on")
@@ -296,26 +248,33 @@ class ChromaVectorStore:
         or_conditions = []
         
         # Global knowledge
-        or_conditions.append({"isGlobal": True})
-        
-        # Knowledge with no tenant restriction
-        # Note: Chroma doesn't have a direct "field not exists" filter,
-        # so we'll handle this in the application logic after retrieval
+        or_conditions.append(FieldCondition(
+            key="isGlobal",
+            match=models.MatchValue(value=True)
+        ))
         
         # Knowledge for user's tenants
-        for tenant in user_attributes.userTenants:
-            tenant_condition = {"tenantId": tenant.tenantId}
-            or_conditions.append(tenant_condition)
+        if user_tenant_ids:
+            or_conditions.append(FieldCondition(
+                key="tenantId",
+                match=models.MatchAny(any=user_tenant_ids)
+            ))
         
-        return {"$or": or_conditions} if len(or_conditions) > 1 else or_conditions[0] if or_conditions else None
+        # If we have conditions, create an OR filter
+        if or_conditions:
+            return Filter(must=or_conditions) if len(or_conditions) == 1 else Filter(should=or_conditions)
+        
+        return None
 
     def get_collection_stats(self) -> Dict[str, Any]:
         """Get statistics about the collection"""
         try:
-            count = self.collection.count()
+            collection_info = self.client.get_collection(self.collection_name)
             return {
-                "total_chunks": count,
-                "collection_name": self.collection.name
+                "total_chunks": collection_info.points_count,
+                "collection_name": self.collection_name,
+                "vector_size": collection_info.config.params.vectors.size,
+                "distance": collection_info.config.params.vectors.distance.value
             }
         except Exception as e:
             logger.error(f"Error getting collection stats: {e}")
