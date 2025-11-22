@@ -114,7 +114,8 @@ class KnowledgeService:
             chunks = []
             chunk_ids = []
             for i, chunk_text in enumerate(chunks_text):
-                chunk_id = f"{knowledge_id}_chunk_{i}"
+                # Generate a proper UUID for the chunk ID (Qdrant requirement)
+                chunk_id = str(uuid.uuid4())
                 chunk = KnowledgeChunk(
                     id=chunk_id,
                     knowledge_id=knowledge_id,
@@ -234,7 +235,8 @@ class KnowledgeService:
             chunk_ids = []
             
             for i, chunk_text in enumerate(chunks_text):
-                chunk_id = f"{knowledge_id}_chunk_{i}"
+                # Generate a proper UUID for the chunk ID (Qdrant requirement)
+                chunk_id = str(uuid.uuid4())
                 chunk = KnowledgeChunk(
                     id=chunk_id,
                     knowledge_id=knowledge_id,

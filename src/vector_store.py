@@ -46,7 +46,7 @@ class QdrantVectorStore:
             raise ValueError("GOOGLE_API_KEY environment variable is required")
             
         genai.configure(api_key=google_api_key)
-        self.embedding_model = "gemini-embeddings-001"
+        self.embedding_model = "gemini-embedding-001"
         logger.info("✓ Successfully configured Google GenAI")
         
         # Ensure collection exists
@@ -82,7 +82,8 @@ class QdrantVectorStore:
                 embedding_result = genai.embed_content(
                     model=self.embedding_model,
                     content=text,
-                    task_type=task_type
+                    task_type=task_type,
+                    output_dimensionality=768
                 )
                 results.append(embedding_result['embedding'])
             
@@ -101,6 +102,20 @@ class QdrantVectorStore:
             
             points = []
             for i, chunk in enumerate(chunks):
+                # Validate chunk ID format
+                chunk_id = chunk.id
+                logger.debug(f"Processing chunk {i+1}/{len(chunks)} with ID: {chunk_id}")
+                
+                # Ensure ID is a valid UUID format for Qdrant
+                try:
+                    # This will raise an error if the ID is not a valid UUID
+                    import uuid as uuid_lib
+                    uuid_obj = uuid_lib.UUID(chunk_id)
+                    logger.debug(f"✓ Valid UUID confirmed: {chunk_id}")
+                except ValueError:
+                    logger.error(f"✗ Invalid UUID format: {chunk_id}")
+                    raise ValueError(f"Chunk ID {chunk_id} is not a valid UUID format")
+                
                 # Flatten metadata for Qdrant payload
                 payload = {
                     "knowledge_id": chunk.knowledge_id,
@@ -114,7 +129,7 @@ class QdrantVectorStore:
                 }
                 
                 points.append(PointStruct(
-                    id=chunk.id,  # Ensure this is a valid UUID or integer
+                    id=chunk_id,  # Validated UUID
                     vector=embeddings[i],
                     payload=payload
                 ))

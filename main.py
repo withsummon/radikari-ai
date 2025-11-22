@@ -6,20 +6,37 @@ A Python-based worker that consumes MQ messages from external backend for knowle
 This service runs as a headless worker without any HTTP API endpoints.
 
 Usage:
-- python main.py         # Start MQ consumer worker
+- python main.py                                    # Start MQ consumer worker with default .env
+- python main.py --env-file .env.local             # Start with specific environment file
+- uv run --env-file .env.local main.py             # Alternative way to specify env file
 """
 
 import os
 import sys
 import logging
 import asyncio
+import argparse
 from dotenv import load_dotenv
 
 # Add src to Python path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
 
+def load_environment(env_file=None):
+    """Load environment variables from specified file or default"""
+    if env_file and os.path.exists(env_file):
+        print(f"Loading environment from: {env_file}")
+        load_dotenv(env_file)
+    else:
+        print("Loading environment from default .env file")
+        load_dotenv()
+
+# Parse command line arguments
+parser = argparse.ArgumentParser(description='Radikari AI Worker')
+parser.add_argument('--env-file', type=str, help='Path to environment file')
+args = parser.parse_args()
+
 # Load environment variables
-load_dotenv()
+load_environment(args.env_file)
 
 # Configure logging
 logging.basicConfig(

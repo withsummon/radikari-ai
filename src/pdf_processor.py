@@ -65,52 +65,98 @@ class PDFProcessor:
         if not pdfplumber:
             raise ImportError("pdfplumber library not available")
         
-        with tempfile.NamedTemporaryFile(suffix='.pdf', delete=False) as tmp_file:
-            tmp_file.write(pdf_content)
-            tmp_file.flush()
+        tmp_file_path = None
+        try:
+            # Create temporary file with proper cleanup
+            with tempfile.NamedTemporaryFile(suffix='.pdf', delete=False) as tmp_file:
+                tmp_file_path = tmp_file.name
+                tmp_file.write(pdf_content)
+                tmp_file.flush()
+                # Force Windows to write all bytes to disk
+                os.fsync(tmp_file.fileno())
             
-            try:
-                text_parts = []
-                with pdfplumber.open(tmp_file.name) as pdf:
-                    for page_num, page in enumerate(pdf.pages, 1):
-                        try:
-                            page_text = page.extract_text()
-                            if page_text:
-                                text_parts.append(f"--- Page {page_num} ---\n{page_text}")
-                        except Exception as e:
-                            logger.warning(f"Failed to extract text from page {page_num}: {e}")
-                
-                return "\n\n".join(text_parts)
-                
-            finally:
-                os.unlink(tmp_file.name)
+            # Close file handle before processing
+            text_parts = []
+            with pdfplumber.open(tmp_file_path) as pdf:
+                for page_num, page in enumerate(pdf.pages, 1):
+                    try:
+                        page_text = page.extract_text()
+                        if page_text:
+                            text_parts.append(f"--- Page {page_num} ---\n{page_text}")
+                    except Exception as e:
+                        logger.warning(f"Failed to extract text from page {page_num}: {e}")
+            
+            return "\n\n".join(text_parts)
+            
+        except Exception as e:
+            logger.error(f"pdfplumber extraction error: {e}")
+            raise
+        finally:
+            # Cleanup with retry mechanism for Windows
+            if tmp_file_path and os.path.exists(tmp_file_path):
+                self._safe_delete_file(tmp_file_path)
     
     def extract_text_with_pypdf2(self, pdf_content: bytes) -> str:
         """Extract text using PyPDF2 library."""
         if not PyPDF2:
             raise ImportError("PyPDF2 library not available")
         
-        with tempfile.NamedTemporaryFile(suffix='.pdf', delete=False) as tmp_file:
-            tmp_file.write(pdf_content)
-            tmp_file.flush()
+        tmp_file_path = None
+        try:
+            # Create temporary file with proper cleanup
+            with tempfile.NamedTemporaryFile(suffix='.pdf', delete=False) as tmp_file:
+                tmp_file_path = tmp_file.name
+                tmp_file.write(pdf_content)
+                tmp_file.flush()
+                # Force Windows to write all bytes to disk
+                os.fsync(tmp_file.fileno())
             
+            # Close file handle before processing
+            text_parts = []
+            with open(tmp_file_path, 'rb') as pdf_file:
+                pdf_reader = PyPDF2.PdfReader(pdf_file)
+                
+                for page_num, page in enumerate(pdf_reader.pages, 1):
+                    try:
+                        page_text = page.extract_text()
+                        if page_text:
+                            text_parts.append(f"--- Page {page_num} ---\n{page_text}")
+                    except Exception as e:
+                        logger.warning(f"Failed to extract text from page {page_num}: {e}")
+            
+            return "\n\n".join(text_parts)
+            
+        except Exception as e:
+            logger.error(f"PyPDF2 extraction error: {e}")
+            raise
+        finally:
+            # Cleanup with retry mechanism for Windows
+            if tmp_file_path and os.path.exists(tmp_file_path):
+                self._safe_delete_file(tmp_file_path)
+
+    def _safe_delete_file(self, file_path: str, max_retries: int = 3, delay: float = 0.1):
+        """
+        Safely delete a file with retry mechanism for Windows file locking issues.
+        
+        Args:
+            file_path: Path to the file to delete
+            max_retries: Maximum number of deletion attempts
+            delay: Delay between retry attempts in seconds
+        """
+        import time
+        
+        for attempt in range(max_retries):
             try:
-                text_parts = []
-                with open(tmp_file.name, 'rb') as pdf_file:
-                    pdf_reader = PyPDF2.PdfReader(pdf_file)
-                    
-                    for page_num, page in enumerate(pdf_reader.pages, 1):
-                        try:
-                            page_text = page.extract_text()
-                            if page_text:
-                                text_parts.append(f"--- Page {page_num} ---\n{page_text}")
-                        except Exception as e:
-                            logger.warning(f"Failed to extract text from page {page_num}: {e}")
-                
-                return "\n\n".join(text_parts)
-                
-            finally:
-                os.unlink(tmp_file.name)
+                os.unlink(file_path)
+                logger.debug(f"Successfully deleted temporary file: {file_path}")
+                return
+            except (OSError, PermissionError) as e:
+                if attempt == max_retries - 1:
+                    logger.warning(f"Failed to delete temporary file after {max_retries} attempts: {file_path} - {e}")
+                    # Don't raise the exception, just log it - the main processing should continue
+                else:
+                    logger.debug(f"Retry {attempt + 1}/{max_retries} for file deletion: {file_path}")
+                    time.sleep(delay)
     
     def extract_text_from_pdf(self, pdf_content: bytes) -> str:
         """
