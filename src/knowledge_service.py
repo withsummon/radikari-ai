@@ -59,8 +59,12 @@ class KnowledgeService:
     def process_knowledge_create_message(self, message_data: Dict[str, Any]) -> Dict[str, Any]:
         """Process KNOWLEDGE_CREATE message from RabbitMQ"""
         try:
+            logger.info(f"DEBUG: Received raw message_data: {message_data}") # DEBUG: Log raw message
+            
             # Parse the message
             message = KnowledgeCreateMessage(**message_data)
+            
+            logger.info(f"DEBUG: Parsed message metadata: {message.metadata}") # DEBUG: Log parsed metadata
             
             # Process content based on file type
             content = message.content
@@ -82,16 +86,9 @@ class KnowledgeService:
                 tenantId=message.metadata.tenantId,
                 tenantRoleIds=message.metadata.accessUserIds or [],
                 type="ARTICLE" if message.metadata.type == "ARTICLE" else "FILE",
-                isGlobal=(message.metadata.access == "PUBLIC")
+                isGlobal=(message.metadata.access == "PUBLIC"),
+                headline=message.metadata.headline
             )
-            
-            # Create knowledge using existing method
-            request_data = {
-                "content": content,
-                "metadata": metadata.dict(),
-                "filetype": message.fileType,
-                "url": message.fileUrls[0] if message.fileUrls else None
-            }
             
             # Override the knowledge ID to use the one from the message
             knowledge_id = message.metadata.knowledgeId

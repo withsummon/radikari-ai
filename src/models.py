@@ -17,6 +17,7 @@ class UserAttributes(BaseModel):
 # New message contract models for RabbitMQ
 class KnowledgeMessageMetadata(BaseModel):
     knowledgeId: str
+    headline: str
     type: Literal["CASE", "ARTICLE"]
     access: Literal["PUBLIC", "TENANT", "EMAIL"]
     tenantId: Optional[str] = None
@@ -28,6 +29,7 @@ class KnowledgeCreateMessage(BaseModel):
     content: str
     fileType: Optional[str] = None
     fileUrls: List[str]
+    headline: Optional[str] = None # backward compatibility
     
     @field_validator('fileType')
     @classmethod
@@ -73,6 +75,7 @@ class KnowledgeMetadata(BaseModel):
     tenantRoleIds: Optional[List[str]] = None
     type: Literal["ARTICLE", "FILE"]
     isGlobal: bool
+    headline: str
 
 
 class Knowledge(BaseModel):

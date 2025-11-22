@@ -124,7 +124,7 @@ class QdrantVectorStore:
                     "type": chunk.metadata.type,
                     "isGlobal": chunk.metadata.isGlobal,
                     "tenantId": chunk.metadata.tenantId,
-                    # Store arrays as lists in Qdrant (it supports them)
+                    "headline": chunk.metadata.headline,
                     "tenantRoleIds": chunk.metadata.tenantRoleIds or []
                 }
                 
@@ -176,6 +176,7 @@ class QdrantVectorStore:
                 "type": new_metadata.type,
                 "isGlobal": new_metadata.isGlobal,
                 "tenantId": new_metadata.tenantId,
+                "headline": new_metadata.headline,
                 "tenantRoleIds": new_metadata.tenantRoleIds or []
             }
             
