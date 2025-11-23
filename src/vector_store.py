@@ -2,6 +2,8 @@
 import os
 import logging
 from typing import List, Dict, Any, Optional
+import numpy as np
+import uuid as uuid_lib
 import google.generativeai as genai
 from qdrant_client import QdrantClient
 from qdrant_client.http import models
@@ -85,7 +87,14 @@ class QdrantVectorStore:
                     task_type=task_type,
                     output_dimensionality=768
                 )
-                results.append(embedding_result['embedding'])
+                
+                # L2 Normalization
+                embedding = np.array(embedding_result['embedding'])
+                norm = np.linalg.norm(embedding)
+                if norm > 0:
+                    embedding = embedding / norm
+                
+                results.append(embedding.tolist())
             
             logger.debug(f"✓ Successfully generated {len(results)} embeddings")
             return results
@@ -108,9 +117,7 @@ class QdrantVectorStore:
                 
                 # Ensure ID is a valid UUID format for Qdrant
                 try:
-                    # This will raise an error if the ID is not a valid UUID
-                    import uuid as uuid_lib
-                    uuid_obj = uuid_lib.UUID(chunk_id)
+                    uuid_lib.UUID(chunk_id)
                     logger.debug(f"✓ Valid UUID confirmed: {chunk_id}")
                 except ValueError:
                     logger.error(f"✗ Invalid UUID format: {chunk_id}")
@@ -205,11 +212,17 @@ class QdrantVectorStore:
         """
         try:
             logger.info(f"Searching for: '{query}' with {n_results} results")
-            embedding = genai.embed_content(
+            embedding_raw = genai.embed_content(
                 model=self.embedding_model,
                 content=query,
                 task_type="retrieval_query"
             )['embedding']
+            
+            embedding_np = np.array(embedding_raw)
+            norm = np.linalg.norm(embedding_np)
+            if norm > 0:
+                embedding_np = embedding_np / norm
+            embedding = embedding_np.tolist()
             
             # Convert dict filter to Qdrant Filter object if necessary
             query_filter = None
