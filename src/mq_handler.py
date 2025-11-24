@@ -65,25 +65,34 @@ class MQHandler:
             self.channel.queue_declare(queue=self.KNOWLEDGE_QUEUE, durable=True)
             self.channel.queue_declare(queue=self.RESPONSE_QUEUE, durable=True)
             
-            # Declare new topic-based queues without TTL to allow for longer PDF processing
-            self.channel.queue_declare(
-                queue=self.KNOWLEDGE_CREATE_QUEUE,
-                durable=True
-            )
-            self.channel.queue_declare(
-                queue=self.KNOWLEDGE_UPDATE_QUEUE,
-                durable=True
-            )
-            self.channel.queue_declare(
-                queue=self.KNOWLEDGE_DELETE_QUEUE,
-                durable=True
-            )
+            # Declare new topic-based queues with self-healing
+            self._declare_queue_with_recovery(self.KNOWLEDGE_CREATE_QUEUE)
+            self._declare_queue_with_recovery(self.KNOWLEDGE_UPDATE_QUEUE)
+            self._declare_queue_with_recovery(self.KNOWLEDGE_DELETE_QUEUE)
             
             logger.info("Connected to RabbitMQ successfully")
             
         except Exception as e:
             logger.error(f"Failed to connect to RabbitMQ: {e}")
             raise
+
+    def _declare_queue_with_recovery(self, queue_name: str):
+        """Declare a queue and recover from TTL mismatch errors."""
+        try:
+            logger.info(f"Declaring queue: {queue_name}")
+            self.channel.queue_declare(queue=queue_name, durable=True)
+            logger.info(f"Successfully declared queue: {queue_name}")
+        except pika.exceptions.ChannelClosedByBroker as e:
+            if "x-message-ttl" in str(e):
+                logger.warning(f"Queue {queue_name} has incompatible TTL. Recreating...")
+                # Re-open channel to recover from channel closure
+                self.channel = self.connection.channel()
+                self.channel.queue_delete(queue=queue_name)
+                logger.info(f"Deleted queue {queue_name}")
+                self.channel.queue_declare(queue=queue_name, durable=True)
+                logger.info(f"Recreated queue {queue_name} successfully")
+            else:
+                raise
 
     def disconnect(self):
         """Close RabbitMQ connection"""
