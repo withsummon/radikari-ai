@@ -2,15 +2,15 @@ import requests
 import os
 from typing import List
 import logging
-import google.generativeai as genai
-from PIL import Image
-import io
+from openai import OpenAI
+import base64
+from io import BytesIO
 
 logger = logging.getLogger(__name__)
 
 class ImageProcessor:
     """
-    Image processor for downloading and generating descriptions for images using Multimodal LLM.
+    Image processor for downloading and generating descriptions for images using OpenAI.
     """
     
     def __init__(self):
@@ -18,21 +18,21 @@ class ImageProcessor:
         self.session.headers.update({
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
         })
-        self._setup_genai()
+        self._setup_openai()
         
-    def _setup_genai(self):
-        """Configure Google Generative AI"""
-        api_key = os.getenv("GOOGLE_API_KEY")
+    def _setup_openai(self):
+        """Configure OpenAI"""
+        api_key = os.getenv("OPENAI_API_KEY")
         if not api_key:
-            logger.warning("GOOGLE_API_KEY not found. Image processing will not work.")
+            logger.warning("OPENAI_API_KEY not found. Image processing will not work.")
             return
             
-        genai.configure(api_key=api_key)
-        self.model = genai.GenerativeModel('gemini-2.0-flash')
+        self.client = OpenAI(api_key=api_key)
+        self.model = "gpt-4.1-mini" # User specified model
         
-    def download_image(self, url: str, timeout: int = 30) -> Image.Image:
+    def download_image_as_base64(self, url: str, timeout: int = 30) -> str:
         """
-        Download image from URL and return as PIL Image.
+        Download image from URL and return as base64 string.
         """
         try:
             logger.info(f"Downloading image from: {url}")
@@ -43,31 +43,45 @@ class ImageProcessor:
             content_type = response.headers.get('content-type', '').lower()
             if not content_type.startswith('image/'):
                 logger.warning(f"Content type '{content_type}' may not be an image")
-                
-            return Image.open(io.BytesIO(response.content))
+            
+            return base64.b64encode(response.content).decode('utf-8')
             
         except Exception as e:
             logger.error(f"Failed to download image from {url}: {e}")
             raise
 
-    def generate_description(self, image: Image.Image) -> str:
+    def generate_description(self, base64_image: str) -> str:
         """
-        Generate detailed description (alt text) for the image using Gemini.
+        Generate detailed description (alt text) for the image using OpenAI.
         """
         try:
-            if not hasattr(self, 'model'):
-                self._setup_genai()
-                if not hasattr(self, 'model'):
+            if not hasattr(self, 'client'):
+                self._setup_openai()
+                if not hasattr(self, 'client'):
                     return "Error: AI model not configured (missing API Key)."
 
-            prompt = (
-                "Please describe this image in detail. "
-                "Include main subjects, setting, text (if any visible), and relevant context. "
-                "The description should be precise and suitable for a knowledge base search index."
+            response = self.client.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "text", 
+                                "text": "Please describe this image in detail. Include main subjects, setting, text (if any visible), and relevant context. The description should be precise and suitable for a knowledge base search index."
+                            },
+                            {
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": f"data:image/jpeg;base64,{base64_image}"
+                                }
+                            }
+                        ],
+                    }
+                ],
+                max_tokens=500,
             )
-            
-            response = self.model.generate_content([prompt, image])
-            return response.text
+            return response.choices[0].message.content
             
         except Exception as e:
             logger.error(f"Failed to generate image description: {e}")
@@ -83,8 +97,8 @@ class ImageProcessor:
             try:
                 logger.info(f"Processing Image {i}/{len(urls)}: {url}")
                 
-                image = self.download_image(url)
-                description = self.generate_description(image)
+                base64_image = self.download_image_as_base64(url)
+                description = self.generate_description(base64_image)
                 
                 if description:
                     descriptions.append(f"=== Image {i}: {url} ===\n[Image Description]:\n{description}")
