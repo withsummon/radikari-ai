@@ -17,6 +17,7 @@ from .models import (
 from .vector_store import QdrantVectorStore
 from .mq_handler import MQHandler
 from .pdf_processor import PDFProcessor
+from .image_processor import ImageProcessor
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +56,7 @@ class KnowledgeService:
         self.text_chunker = TextChunker()
         self.knowledge_store: Dict[str, Knowledge] = {}  # In-memory store for knowledge metadata
         self.pdf_processor = PDFProcessor()
+        self.image_processor = ImageProcessor()
         
     def process_knowledge_create_message(self, message_data: Dict[str, Any]) -> Dict[str, Any]:
         """Process KNOWLEDGE_CREATE message from RabbitMQ"""
@@ -79,7 +81,19 @@ class KnowledgeService:
                         logger.warning("No text extracted from PDF files")
                 except Exception as e:
                     logger.error(f"Failed to process PDF files: {e}")
-                    # Continue with original content if PDF processing fails
+                    # Continue with original content if processing fails
+            
+            elif message.fileType == "image" and message.fileUrls:
+                logger.info(f"Processing Image files for knowledge {message.metadata.knowledgeId}")
+                try:
+                    image_descriptions = self.image_processor.process_image_urls(message.fileUrls)
+                    if image_descriptions.strip():
+                        content = f"{content}\n\n{image_descriptions}"
+                    else:
+                        logger.warning("No descriptions generated from Image files")
+                except Exception as e:
+                    logger.error(f"Failed to process Image files: {e}")
+                    # Continue with original content if processing fails
             
             # Convert to internal format
             metadata = KnowledgeMetadata(
