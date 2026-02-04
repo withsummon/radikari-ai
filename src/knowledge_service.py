@@ -18,6 +18,7 @@ from .vector_store import QdrantVectorStore
 from .mq_handler import MQHandler
 from .pdf_processor import PDFProcessor
 from .image_processor import ImageProcessor
+from .spreadsheet_processor import SpreadsheetProcessor
 
 logger = logging.getLogger(__name__)
 
@@ -57,6 +58,7 @@ class KnowledgeService:
         self.knowledge_store: Dict[str, Knowledge] = {}  # In-memory store for knowledge metadata
         self.pdf_processor = PDFProcessor()
         self.image_processor = ImageProcessor()
+        self.spreadsheet_processor = SpreadsheetProcessor()
         
     def process_knowledge_create_message(self, message_data: Dict[str, Any]) -> Dict[str, Any]:
         """Process KNOWLEDGE_CREATE message from RabbitMQ"""
@@ -93,6 +95,18 @@ class KnowledgeService:
                         logger.warning("No descriptions generated from Image files")
                 except Exception as e:
                     logger.error(f"Failed to process Image files: {e}")
+                    # Continue with original content if processing fails
+
+            elif message.fileType in ["spreadsheet", "csv", "xlsx", "xls"] and message.fileUrls:
+                logger.info(f"Processing Spreadsheet files for knowledge {message.metadata.knowledgeId}")
+                try:
+                    spreadsheet_text = self.spreadsheet_processor.process_spreadsheet_urls(message.fileUrls)
+                    if spreadsheet_text.strip():
+                        content = f"{content}\n\n{spreadsheet_text}"
+                    else:
+                        logger.warning("No text extracted from Spreadsheet files")
+                except Exception as e:
+                    logger.error(f"Failed to process Spreadsheet files: {e}")
                     # Continue with original content if processing fails
             
             # Convert to internal format
