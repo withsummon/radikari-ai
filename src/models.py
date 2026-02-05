@@ -39,8 +39,8 @@ class KnowledgeCreateMessage(BaseModel):
             return None  # Allow None values and empty strings (convert empty to None)
         if isinstance(v, str):
             v_lower = v.lower()
-            if v_lower not in ["pdf", "image"]:
-                raise ValueError(f"fileType must be 'pdf' or 'image' (case-insensitive), got '{v}'")
+            if v_lower not in ["pdf", "image", "spreadsheet", "csv", "xlsx", "xls"]:
+                raise ValueError(f"fileType must be 'pdf', 'image', 'spreadsheet', 'csv', 'xlsx', or 'xls' (case-insensitive), got '{v}'")
             return v_lower
         return v
 
@@ -59,8 +59,8 @@ class KnowledgeUpdateMessage(BaseModel):
             return None  # Allow None values and empty strings (convert empty to None)
         if isinstance(v, str):
             v_lower = v.lower()
-            if v_lower not in ["pdf", "image"]:
-                raise ValueError(f"fileType must be 'pdf' or 'image' (case-insensitive), got '{v}'")
+            if v_lower not in ["pdf", "image", "spreadsheet", "csv", "xlsx", "xls"]:
+                raise ValueError(f"fileType must be 'pdf', 'image', 'spreadsheet', 'csv', 'xlsx', or 'xls' (case-insensitive), got '{v}'")
             return v_lower
         return v
 
