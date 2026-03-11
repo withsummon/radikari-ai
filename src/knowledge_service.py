@@ -434,23 +434,40 @@ class KnowledgeService:
         if chunk_tenant_id not in user_tenant_ids:
             return False
         
-        # Check role access if specified
+        # Check role/user access if specified
         chunk_role_ids = chunk_metadata.get("tenantRoleIds")
-        if chunk_role_ids:
-            # Parse comma-separated role IDs
-            required_roles = chunk_role_ids.split(",") if isinstance(chunk_role_ids, str) else chunk_role_ids
-            
-            # Get user roles for this tenant
-            user_roles = []
-            for tenant in user_attributes.userTenants:
-                if tenant.tenantId == chunk_tenant_id:
-                    user_roles.append(tenant.tenantRole)
-            
-            # Check if user has any of the required roles
-            if not any(role in user_roles for role in required_roles):
-                return False
         
-        return True
+        # If tenantRoleIds is empty or None, allow access (no specific restrictions)
+        if not chunk_role_ids:
+            return True
+        
+        # Parse tenantRoleIds (could be list or comma-separated string)
+        if isinstance(chunk_role_ids, str):
+            required_ids = [rid.strip() for rid in chunk_role_ids.split(",") if rid.strip()]
+        else:
+            required_ids = chunk_role_ids if isinstance(chunk_role_ids, list) else []
+        
+        # If tenantRoleIds is empty after parsing, allow access
+        if not required_ids:
+            return True
+        
+        # Get user's role for this specific tenant
+        user_role_for_tenant = None
+        for tenant in user_attributes.userTenants:
+            if tenant.tenantId == chunk_tenant_id:
+                user_role_for_tenant = tenant.tenantRole
+                break
+        
+        # Check 1: If tenantRoleIds contains the user's ID, allow access (user-specific access)
+        if user_attributes.userId in required_ids:
+            return True
+        
+        # Check 2: If tenantRoleIds contains the user's role, allow access (role-based access)
+        if user_role_for_tenant and user_role_for_tenant in required_ids:
+            return True
+        
+        # No match found - deny access
+        return False
     
     def get_knowledge_stats(self) -> Dict[str, Any]:
         """Get statistics about the knowledge base"""

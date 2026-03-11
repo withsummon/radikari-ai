@@ -268,30 +268,63 @@ class QdrantVectorStore:
         # Users can access:
         # 1. Global knowledge (isGlobal = True)
         # 2. Knowledge with no tenantId (public within system)
-        # 3. Knowledge where user has access to the tenant and role
+        # 3. Knowledge where user's tenant is in tenantId
+        # 4. Knowledge where user's ID is in tenantRoleIds (user-specific access)
+        # 5. Knowledge where user's role is in tenantRoleIds (role-based access)
+        # 6. Knowledge where tenantRoleIds is empty (no specific restrictions)
         
         user_tenant_ids = [tenant.tenantId for tenant in user_attributes.userTenants]
         user_roles = [tenant.tenantRole for tenant in user_attributes.userTenants]
+        user_id = user_attributes.userId
         
         # Build OR conditions for access
-        or_conditions = []
+        should_conditions = []
         
         # Global knowledge
-        or_conditions.append(FieldCondition(
+        should_conditions.append(FieldCondition(
             key="isGlobal",
             match=models.MatchValue(value=True)
         ))
         
         # Knowledge for user's tenants
         if user_tenant_ids:
-            or_conditions.append(FieldCondition(
+            should_conditions.append(FieldCondition(
                 key="tenantId",
                 match=models.MatchAny(any=user_tenant_ids)
             ))
         
-        # If we have conditions, create an OR filter
-        if or_conditions:
-            return Filter(must=or_conditions) if len(or_conditions) == 1 else Filter(should=or_conditions)
+        # User-specific access: user's ID is in tenantRoleIds
+        # This handles the case where tenantRoleIds contains user IDs (e.g., ["user-123"])
+        if user_id:
+            should_conditions.append(FieldCondition(
+                key="tenantRoleIds",
+                match=models.MatchAny(any=[user_id])
+            ))
+        
+        # Role-based access: user's role is in tenantRoleIds
+        # This handles the case where tenantRoleIds contains role IDs (e.g., ["admin", "editor"])
+        if user_roles:
+            should_conditions.append(FieldCondition(
+                key="tenantRoleIds",
+                match=models.MatchAny(any=user_roles)
+            ))
+        
+        # Knowledge with empty tenantRoleIds (no specific restrictions)
+        # This allows access when tenantRoleIds = [] (empty array)
+        should_conditions.append(FieldCondition(
+            key="tenantRoleIds",
+            match=models.MatchValue(value=[])
+        ))
+        
+        # Also check for missing/null tenantRoleIds (stored as empty in Qdrant)
+        should_conditions.append(FieldCondition(
+            key="tenantRoleIds",
+            match=models.MatchValue(value="")
+        ))
+        
+        # Build final filter - any of these conditions grants access
+        if should_conditions:
+            return Filter(should=should_conditions)
         
         return None
 
